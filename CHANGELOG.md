@@ -6,6 +6,7 @@
 - Hardened npm installs by tracking `package-lock.json`, pinning direct dependencies, and using `npm ci --ignore-scripts` in CI and release workflows. Thanks to Modestas Vainius (@modax) for #234.
 
 ### Fixed
+- Resolve the async result watcher directory with `fs.realpathSync.native()` before `fs.watch()` so Windows profiles with 8.3 temp paths do not crash Pi when async subagent results arrive. Thanks to kerushidao (@kerushidao) for #254.
 - Keep crowded async subagent widgets at a stable collapsed height in short terminals, reducing destructive full-screen TUI redraws and flicker. Thanks to ssyram (@ssyram) for #186.
 - Added `subagents.disableThinking` so bundled builtin agents can drop thinking suffix defaults for providers that do not accept them. Thanks to Joshua Harding (@jhstatewide) for #212.
 - List configured subagent skills by name, description, and file path instead of inlining full skill bodies, and ensure tool-restricted children can read those skill files on demand. Thanks to Ruben Paz (@Istar-Eldritch) for #183.
