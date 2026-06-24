@@ -258,16 +258,19 @@ export function formatAcceptancePrompt(acceptance: ResolvedAcceptanceConfig): st
 	lines.push(
 		"",
 		"Finish with a fenced JSON block tagged `acceptance-report` in this shape:",
+		"Use empty arrays when no items apply; array fields contain strings unless object entries are shown.",
 		"```acceptance-report",
 		JSON.stringify({
 			criteriaSatisfied: [{ id: "criterion-1", status: "satisfied", evidence: "specific proof" }],
-			changedFiles: [],
-			testsAddedOrUpdated: [],
+			changedFiles: ["src/file.ts"],
+			testsAddedOrUpdated: ["test/file.test.ts"],
 			commandsRun: [{ command: "command", result: "passed", summary: "short result" }],
-			validationOutput: [],
-			residualRisks: [],
+			validationOutput: ["validation output or concise summary"],
+			residualRisks: ["none"],
 			noStagedFiles: true,
-			notes: "anything else the parent should know",
+			diffSummary: "short description of the diff",
+			reviewFindings: ["blocker: file.ts:12 - issue found, or no blockers"],
+			manualNotes: "anything else the parent should know",
 		}, null, 2),
 		"```",
 	);
@@ -353,17 +356,26 @@ function fencedBlocks(output: string, tag: string): string[] {
 		.filter((value): value is string => Boolean(value));
 }
 
-function parseAcceptanceReportBody(body: string): AcceptanceReport | undefined {
+function validationPathLabelForWrapper(value: unknown): string {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+	const record = value as Record<string, unknown>;
+	if ("acceptance" in record) return "acceptance";
+	if ("acceptance-report" in record) return "acceptance-report";
+	return "";
+}
+
+function parseAcceptanceReportBody(body: string): { report?: AcceptanceReport; errors: string[] } {
 	const parsed = parseReportJson(body);
 	const report = unwrapAcceptanceReport(parsed);
-	return isAcceptanceReport(report) ? report : undefined;
+	return validateAcceptanceReport(report, validationPathLabelForWrapper(parsed));
 }
 
 function parseGenericJsonAcceptanceReportBody(body: string): AcceptanceReport | undefined {
 	const parsed = parseReportJson(body);
 	const report = unwrapAcceptanceReport(parsed);
-	if (!isAcceptanceReport(report)) return undefined;
-	return hasGenericAcceptanceReportSignal(report) ? report : undefined;
+	const validation = validateAcceptanceReport(report);
+	if (!validation.report) return undefined;
+	return hasGenericAcceptanceReportSignal(validation.report) ? validation.report : undefined;
 }
 
 export function parseAcceptanceReport(output: string): { report?: AcceptanceReport; error?: string } {
@@ -371,9 +383,9 @@ export function parseAcceptanceReport(output: string): { report?: AcceptanceRepo
 	const parseErrors: string[] = [];
 	for (const body of fenced) {
 		try {
-			const report = parseAcceptanceReportBody(body);
-			if (report) return { report };
-			parseErrors.push("acceptance-report block does not contain a valid acceptance report");
+			const validation = parseAcceptanceReportBody(body);
+			if (validation.report) return { report: validation.report };
+			parseErrors.push(`Invalid acceptance-report: ${validation.errors.join("; ")}`);
 		} catch (error) {
 			parseErrors.push(error instanceof Error ? error.message : String(error));
 		}
@@ -391,19 +403,21 @@ export function parseAcceptanceReport(output: string): { report?: AcceptanceRepo
 	const markerIndex = output.search(/ACCEPTANCE_REPORT\s*:/i);
 	if (markerIndex !== -1) {
 		const jsonStart = output.indexOf("{", markerIndex);
-		if (jsonStart !== -1) {
-			const json = extractBalancedJson(output, jsonStart);
-			if (json) {
-				try {
-					const parsed = JSON.parse(json) as unknown;
-					const report = unwrapAcceptanceReport(parsed);
-					if (isAcceptanceReport(report)) return { report };
-				} catch (error) {
-					return { error: error instanceof Error ? error.message : String(error) };
+			if (jsonStart !== -1) {
+				const json = extractBalancedJson(output, jsonStart);
+				if (json) {
+					try {
+						const parsed = JSON.parse(json) as unknown;
+						const report = unwrapAcceptanceReport(parsed);
+						const validation = validateAcceptanceReport(report, validationPathLabelForWrapper(parsed));
+						if (validation.report) return { report: validation.report };
+						return { error: `Failed to parse acceptance-report: Invalid acceptance-report: ${validation.errors.join("; ")}` };
+					} catch (error) {
+						return { error: error instanceof Error ? error.message : String(error) };
+					}
 				}
 			}
 		}
-	}
 	return { error: "Structured acceptance report not found." };
 }
 
@@ -434,26 +448,105 @@ function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-function isAcceptanceReport(value: unknown): value is AcceptanceReport {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+function pathFor(base: string, segment: string): string {
+	return base ? `${base}.${segment}` : segment;
+}
+
+function describeValidationValue(value: unknown): string {
+	if (value === undefined) return "missing";
+	if (value === null) return "null";
+	if (Array.isArray(value)) return "array";
+	if (typeof value === "object") return "object";
+	if (typeof value === "string") {
+		const short = value.length > 80 ? `${value.slice(0, 77)}...` : value;
+		return JSON.stringify(short);
+	}
+	return `${typeof value} ${String(value)}`;
+}
+
+function pushTypeError(errors: string[], pathLabel: string, expected: string, value: unknown): void {
+	errors.push(`${pathLabel}: expected ${expected}; got ${describeValidationValue(value)}`);
+}
+
+function validateStringArrayField(errors: string[], value: unknown, pathLabel: string): void {
+	if (!Array.isArray(value)) {
+		pushTypeError(errors, pathLabel, "string[]", value);
+		return;
+	}
+	for (const [index, item] of value.entries()) {
+		if (typeof item !== "string") pushTypeError(errors, `${pathLabel}[${index}]`, "string", item);
+	}
+}
+
+function validateAcceptanceReport(value: unknown, pathLabel = ""): { report?: AcceptanceReport; errors: string[] } {
+	const errors: string[] = [];
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		pushTypeError(errors, pathLabel || "acceptance-report", "object", value);
+		return { errors };
+	}
 	const report = value as AcceptanceReport;
 	if (report.criteriaSatisfied !== undefined) {
-		if (!Array.isArray(report.criteriaSatisfied)) return false;
-		for (const item of report.criteriaSatisfied) {
-			if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-			const criterion = item as { id?: unknown; status?: unknown; evidence?: unknown };
-			if (criterion.id !== undefined && typeof criterion.id !== "string") return false;
-			if (criterion.status !== "satisfied" && criterion.status !== "not-satisfied" && criterion.status !== "not-applicable") return false;
-			if (typeof criterion.evidence !== "string" || !criterion.evidence.trim()) return false;
+		if (!Array.isArray(report.criteriaSatisfied)) {
+			pushTypeError(errors, pathFor(pathLabel, "criteriaSatisfied"), "array", report.criteriaSatisfied);
+		} else {
+			for (const [index, item] of report.criteriaSatisfied.entries()) {
+				const itemPath = `${pathFor(pathLabel, "criteriaSatisfied")}[${index}]`;
+				if (!item || typeof item !== "object" || Array.isArray(item)) {
+					pushTypeError(errors, itemPath, "object", item);
+					continue;
+				}
+				const criterion = item as { id?: unknown; status?: unknown; evidence?: unknown };
+				if (criterion.id !== undefined && typeof criterion.id !== "string") pushTypeError(errors, `${itemPath}.id`, "string", criterion.id);
+				if (criterion.status !== "satisfied" && criterion.status !== "not-satisfied" && criterion.status !== "not-applicable") {
+					pushTypeError(errors, `${itemPath}.status`, "one of \"satisfied\", \"not-satisfied\", \"not-applicable\"", criterion.status);
+				}
+				if (typeof criterion.evidence !== "string" || !criterion.evidence.trim()) pushTypeError(errors, `${itemPath}.evidence`, "non-empty string", criterion.evidence);
+			}
 		}
 	}
-	return report.criteriaSatisfied !== undefined
+	if (report.changedFiles !== undefined) validateStringArrayField(errors, report.changedFiles, pathFor(pathLabel, "changedFiles"));
+	if (report.testsAddedOrUpdated !== undefined) validateStringArrayField(errors, report.testsAddedOrUpdated, pathFor(pathLabel, "testsAddedOrUpdated"));
+	if (report.commandsRun !== undefined) {
+		if (!Array.isArray(report.commandsRun)) {
+			pushTypeError(errors, pathFor(pathLabel, "commandsRun"), "array", report.commandsRun);
+		} else {
+			for (const [index, item] of report.commandsRun.entries()) {
+				const itemPath = `${pathFor(pathLabel, "commandsRun")}[${index}]`;
+				if (!item || typeof item !== "object" || Array.isArray(item)) {
+					pushTypeError(errors, itemPath, "object", item);
+					continue;
+				}
+				const command = item as { command?: unknown; result?: unknown; summary?: unknown };
+				if (typeof command.command !== "string" || !command.command.trim()) pushTypeError(errors, `${itemPath}.command`, "non-empty string", command.command);
+				if (command.result !== "passed" && command.result !== "failed" && command.result !== "not-run") {
+					pushTypeError(errors, `${itemPath}.result`, "one of \"passed\", \"failed\", \"not-run\"", command.result);
+				}
+				if (typeof command.summary !== "string") pushTypeError(errors, `${itemPath}.summary`, "string", command.summary);
+			}
+		}
+	}
+	if (report.validationOutput !== undefined) validateStringArrayField(errors, report.validationOutput, pathFor(pathLabel, "validationOutput"));
+	if (report.residualRisks !== undefined) validateStringArrayField(errors, report.residualRisks, pathFor(pathLabel, "residualRisks"));
+	if (report.noStagedFiles !== undefined && typeof report.noStagedFiles !== "boolean") pushTypeError(errors, pathFor(pathLabel, "noStagedFiles"), "boolean", report.noStagedFiles);
+	if (report.diffSummary !== undefined && typeof report.diffSummary !== "string") pushTypeError(errors, pathFor(pathLabel, "diffSummary"), "string", report.diffSummary);
+	if (report.reviewFindings !== undefined) validateStringArrayField(errors, report.reviewFindings, pathFor(pathLabel, "reviewFindings"));
+	if (report.manualNotes !== undefined && typeof report.manualNotes !== "string") pushTypeError(errors, pathFor(pathLabel, "manualNotes"), "string", report.manualNotes);
+	if (report.notes !== undefined && typeof report.notes !== "string") pushTypeError(errors, pathFor(pathLabel, "notes"), "string", report.notes);
+	if (errors.length > 0) return { errors };
+	const hasReportField = report.criteriaSatisfied !== undefined
 		|| report.changedFiles !== undefined
 		|| report.testsAddedOrUpdated !== undefined
 		|| report.commandsRun !== undefined
+		|| report.validationOutput !== undefined
 		|| report.residualRisks !== undefined
+		|| report.noStagedFiles !== undefined
+		|| report.diffSummary !== undefined
 		|| report.manualNotes !== undefined
+		|| report.notes !== undefined
 		|| report.reviewFindings !== undefined;
+	return hasReportField
+		? { report, errors }
+		: { errors: [`${pathLabel || "acceptance-report"}: expected at least one acceptance report field`] };
 }
 
 function checkCriteriaSatisfied(criteria: ResolvedAcceptanceGate[], report: AcceptanceReport): AcceptanceRuntimeCheck[] {

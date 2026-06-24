@@ -74,6 +74,8 @@ describe("acceptance gates", () => {
 		assert.match(prompt, /Acceptance level: checked/);
 		assert.match(prompt, /Patch the bug/);
 		assert.match(prompt, /```acceptance-report/);
+		assert.match(prompt, /array fields contain strings/);
+		assert.match(prompt, /"reviewFindings": \[\n    "blocker:/);
 	});
 
 	it("parses acceptance-report fences and ignores unrelated json fences", () => {
@@ -173,6 +175,29 @@ describe("acceptance gates", () => {
 		assert.equal(stripAcceptanceReport(output), "done");
 	});
 
+	it("reports field-level validation errors for malformed acceptance-report fields", () => {
+		const invalidReviewerReport = parseAcceptanceReport(report({
+			reviewFindings: [{ id: "B-1", severity: "blocker", finding: "Missing evidence" }],
+		}));
+		assert.equal(invalidReviewerReport.report, undefined);
+		assert.match(invalidReviewerReport.error ?? "", /reviewFindings\[0\]: expected string; got object/);
+
+		const invalidCommandReport = parseAcceptanceReport(report({
+			commandsRun: [{ command: "npm test", exitCode: 0 }],
+		}));
+		assert.equal(invalidCommandReport.report, undefined);
+		assert.match(invalidCommandReport.error ?? "", /commandsRun\[0\]\.result: expected one of "passed", "failed", "not-run"; got missing/);
+		assert.match(invalidCommandReport.error ?? "", /commandsRun\[0\]\.summary: expected string; got missing/);
+
+		const invalidCriteriaReport = parseAcceptanceReport(report({
+			criteriaSatisfied: [{ id: 7, status: "done", evidence: "" }],
+		}));
+		assert.equal(invalidCriteriaReport.report, undefined);
+		assert.match(invalidCriteriaReport.error ?? "", /criteriaSatisfied\[0\]\.id: expected string; got number 7/);
+		assert.match(invalidCriteriaReport.error ?? "", /criteriaSatisfied\[0\]\.status: expected one of "satisfied", "not-satisfied", "not-applicable"; got "done"/);
+		assert.match(invalidCriteriaReport.error ?? "", /criteriaSatisfied\[0\]\.evidence: expected non-empty string; got ""/);
+	});
+
 	it("explicit none disables inferred gates when a reason is present", () => {
 		const acceptance = resolveEffectiveAcceptance({
 			agentName: "worker",
@@ -200,6 +225,28 @@ describe("acceptance gates", () => {
 
 			assert.equal(ledger.status, "rejected");
 			assert.match(acceptanceFailureMessage(ledger) ?? "", /tests-added evidence missing/);
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("surfaces parse validation details in acceptance failure messages", async () => {
+		const cwd = tempRepo();
+		try {
+			const acceptance = resolveEffectiveAcceptance({
+				agentName: "reviewer",
+				task: "Review-only. Do not edit.",
+				explicit: { level: "attested", evidence: ["review-findings"] },
+			});
+			const ledger = await evaluateAcceptance({
+				acceptance,
+				output: report({ reviewFindings: [{ id: "B-1", finding: "Missing evidence" }] }),
+				cwd,
+			});
+
+			assert.equal(ledger.status, "rejected");
+			assert.match(acceptanceFailureMessage(ledger) ?? "", /Failed to parse acceptance-report/);
+			assert.match(acceptanceFailureMessage(ledger) ?? "", /reviewFindings\[0\]: expected string; got object/);
 		} finally {
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
