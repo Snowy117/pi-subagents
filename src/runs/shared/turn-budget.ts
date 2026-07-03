@@ -43,3 +43,10 @@ export function turnBudgetState(budget: ResolvedTurnBudget, turnCount: number, e
 		...(exceeded ? { exceededAtTurn: turnCount } : {}),
 	};
 }
+
+export function shouldAbortForTurnBudget(budget: ResolvedTurnBudget, turnCount: number, terminalAssistantStop: boolean): boolean {
+	const hardLimit = budget.maxTurns + budget.graceTurns;
+	if (turnCount < hardLimit) return false;
+	if (turnCount > hardLimit) return true;
+	return !terminalAssistantStop;
+}

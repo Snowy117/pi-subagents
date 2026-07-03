@@ -35,9 +35,12 @@ interface AsyncResultPayload {
 	timeoutMs?: number;
 	deadlineAt?: number;
 	timedOut?: boolean;
+	turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; exceededAtTurn?: number };
+	turnBudgetExceeded?: boolean;
+	wrapUpRequested?: boolean;
 	totalTokens?: { input: number; output: number; total: number };
 	totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
-	results: Array<{ output?: string; success?: boolean; error?: string; timedOut?: boolean; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }>; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; structuredOutput?: unknown; intercomTarget?: string; acceptance?: { status?: string; childReport?: unknown } }>;
+	results: Array<{ output?: string; success?: boolean; error?: string; timedOut?: boolean; turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; exceededAtTurn?: number }; turnBudgetExceeded?: boolean; wrapUpRequested?: boolean; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }>; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; structuredOutput?: unknown; intercomTarget?: string; acceptance?: { status?: string; childReport?: unknown } }>;
 	outputs?: Record<string, { text?: string; structured?: unknown }>;
 	workflowGraph?: { nodes?: Array<{ kind?: string; label?: string; phase?: string; status?: string; error?: string; outputName?: string; structured?: boolean; children?: Array<{ label?: string; outputName?: string; itemKey?: string; status?: string; error?: string }> }> };
 }
@@ -53,6 +56,9 @@ interface AsyncStatusPayload {
 	timeoutMs?: number;
 	deadlineAt?: number;
 	timedOut?: boolean;
+	turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; exceededAtTurn?: number };
+	turnBudgetExceeded?: boolean;
+	wrapUpRequested?: boolean;
 	totalTokens?: { total: number };
 	totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
 	parallelGroups?: Array<{ start: number; count: number; stepIndex: number }>;
@@ -73,12 +79,36 @@ interface AsyncStatusPayload {
 		tokens?: { total: number };
 		totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
 		acceptance?: { status?: string };
+		turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; exceededAtTurn?: number };
+		turnBudgetExceeded?: boolean;
+		wrapUpRequested?: boolean;
 	}>;
 }
 
 interface MockPiCallRecord {
 	args?: string[];
 	systemPrompts?: Array<{ mode?: string; path?: string; text?: string; error?: string }>;
+}
+
+function mockAssistantMessage(text: string, stopReason: "stop" | "tool_use" = "stop") {
+	return {
+		type: "message_end",
+		message: {
+			role: "assistant",
+			content: stopReason === "tool_use"
+				? [{ type: "text", text }, { type: "toolCall", name: "bash", arguments: { command: "echo test" } }]
+				: [{ type: "text", text }],
+			model: "mock/test-model",
+			stopReason,
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: { total: 0.001 },
+			},
+		},
+	};
 }
 
 interface AsyncExecutionModule {
@@ -509,6 +539,83 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.results[0]?.acceptance, undefined);
 		assert.equal(status.steps?.[0]?.timedOut, true);
 		assert.ok(elapsedMs < 3_000, `timeout should cancel acceptance verification promptly, elapsed ${elapsedMs}ms`);
+	});
+
+	it("async turn budget allows a terminal final grace turn", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [
+				mockAssistantMessage("working before wrap-up", "tool_use"),
+				mockAssistantMessage("final wrapped output", "stop"),
+			],
+		});
+		const id = `async-turn-budget-soft-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Use the final grace turn to wrap up.",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+			turnBudget: { maxTurns: 1, graceTurns: 1 },
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(payload.success, true);
+		assert.equal(payload.state, "complete");
+		assert.equal(payload.turnBudgetExceeded, undefined);
+		assert.equal(payload.wrapUpRequested, true);
+		assert.equal(payload.turnBudget?.outcome, "wrap-up-requested");
+		assert.equal(payload.turnBudget?.turnCount, 2);
+		assert.equal(payload.results[0]?.wrapUpRequested, true);
+		assert.equal(payload.results[0]?.turnBudget?.turnCount, 2);
+		assert.match(payload.results[0]?.output ?? "", /Turn budget wrap-up was requested after 1 assistant turn/);
+		assert.match(payload.results[0]?.output ?? "", /final wrapped output/);
+		assert.equal(status.wrapUpRequested, true);
+		assert.equal(status.turnBudgetExceeded, undefined);
+		assert.equal(status.steps?.[0]?.wrapUpRequested, true);
+		assert.equal(status.steps?.[0]?.turnBudget?.turnCount, 2);
+	});
+
+	it("async turn budget hard-aborts a non-terminal final grace turn", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [
+				mockAssistantMessage("working before wrap-up", "tool_use"),
+				mockAssistantMessage("still starting more tool work", "tool_use"),
+			],
+		});
+		const id = `async-turn-budget-hard-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Exceed the turn budget.",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+			turnBudget: { maxTurns: 1, graceTurns: 1 },
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(payload.success, false);
+		assert.equal(payload.state, "failed");
+		assert.equal(payload.exitCode, 1);
+		assert.equal(payload.turnBudgetExceeded, true);
+		assert.equal(payload.wrapUpRequested, true);
+		assert.equal(payload.turnBudget?.outcome, "exceeded");
+		assert.equal(payload.turnBudget?.turnCount, 2);
+		assert.equal(payload.turnBudget?.exceededAtTurn, 2);
+		assert.equal(payload.results[0]?.turnBudgetExceeded, true);
+		assert.match(payload.results[0]?.output ?? "", /Partial output before turn-budget abort:/);
+		assert.match(payload.results[0]?.output ?? "", /still starting more tool work/);
+		assert.equal(status.state, "failed");
+		assert.equal(status.turnBudgetExceeded, true);
+		assert.equal(status.steps?.[0]?.turnBudgetExceeded, true);
+		assert.equal(status.steps?.[0]?.turnBudget?.outcome, "exceeded");
 	});
 
 	it("async launch messages tell the parent not to sleep-poll", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

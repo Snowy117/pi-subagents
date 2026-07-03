@@ -6,6 +6,7 @@ import {
 	appendTurnBudgetSystemPrompt,
 	formatTurnBudgetOutput,
 	initialTurnBudgetState,
+	shouldAbortForTurnBudget,
 	turnBudgetExceededMessage,
 	turnBudgetSoftNote,
 	turnBudgetState,
@@ -151,6 +152,25 @@ describe("turn-budget module", () => {
 		});
 	});
 
+	describe("shouldAbortForTurnBudget", () => {
+		it("allows a terminal assistant response on the final grace turn", () => {
+			assert.equal(shouldAbortForTurnBudget(budget({ maxTurns: 3, graceTurns: 1 }), 4, true), false);
+		});
+
+		it("aborts a non-terminal assistant response on the final grace turn", () => {
+			assert.equal(shouldAbortForTurnBudget(budget({ maxTurns: 3, graceTurns: 1 }), 4, false), true);
+		});
+
+		it("aborts turns beyond the grace window even if the message is terminal", () => {
+			assert.equal(shouldAbortForTurnBudget(budget({ maxTurns: 3, graceTurns: 1 }), 5, true), true);
+		});
+
+		it("allows a terminal response at the soft limit when grace turns are zero", () => {
+			assert.equal(shouldAbortForTurnBudget(budget({ maxTurns: 2, graceTurns: 0 }), 2, true), false);
+			assert.equal(shouldAbortForTurnBudget(budget({ maxTurns: 2, graceTurns: 0 }), 2, false), true);
+		});
+	});
+
 	describe("turn budget state transitions", () => {
 		it("walks within-budget -> wrap-up-requested -> exceeded as turns accrue", () => {
 			const resolved = budget({ maxTurns: 3, graceTurns: 1 });
@@ -172,7 +192,7 @@ describe("turn-budget module", () => {
 			assert.equal(exceeded.wrapUpRequestedAtTurn, resolved.maxTurns);
 		});
 
-		it("skips the warning phase when grace turns are zero", () => {
+		it("can represent immediate exceedance when grace turns are zero", () => {
 			const resolved = budget({ maxTurns: 2, graceTurns: 0 });
 			const exceeded = turnBudgetState(resolved, resolved.maxTurns, true);
 			assert.equal(exceeded.outcome, "exceeded");

@@ -67,7 +67,7 @@ import {
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
 import { acceptanceFailureMessage, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport } from "../shared/acceptance.ts";
-import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../shared/turn-budget.ts";
+import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, shouldAbortForTurnBudget, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../shared/turn-budget.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
@@ -497,19 +497,20 @@ async function runSingleAttempt(
 			turnBudgetHardKillTimer.unref?.();
 		};
 
-		const updateTurnBudget = (turnCount: number) => {
+		const updateTurnBudget = (turnCount: number, terminalAssistantStop: boolean) => {
 			const budget = options.turnBudget;
 			if (!budget || result.timedOut || result.turnBudgetExceeded) return;
 			if (turnCount < budget.maxTurns) {
 				result.turnBudget = { ...budget, outcome: "within-budget", turnCount };
+				return;
 			}
-			if (turnCount >= budget.maxTurns && !turnBudgetSoftReached) {
+			if (!turnBudgetSoftReached) {
 				turnBudgetSoftReached = true;
 				result.wrapUpRequested = true;
-				result.turnBudget = turnBudgetState(budget, turnCount, false);
 				appendRecentOutput(progress, [turnBudgetSoftNote(budget, turnCount)]);
 			}
-			if (turnCount >= budget.maxTurns + budget.graceTurns) {
+			result.turnBudget = turnBudgetState(budget, turnCount, false);
+			if (shouldAbortForTurnBudget(budget, turnCount, terminalAssistantStop)) {
 				requestTurnBudgetAbort(turnCount);
 			}
 		};
@@ -618,7 +619,11 @@ async function runSingleAttempt(
 				if (evt.message.role === "assistant") {
 					result.usage.turns++;
 					progress.turnCount = result.usage.turns;
-					updateTurnBudget(result.usage.turns);
+					const stopReason = (evt.message as { stopReason?: string }).stopReason;
+					const hasToolCall = Array.isArray(evt.message.content)
+						&& evt.message.content.some((part) => (part as { type?: string }).type === "toolCall");
+					const terminalAssistantStop = stopReason === "stop" && !hasToolCall;
+					updateTurnBudget(result.usage.turns, terminalAssistantStop);
 					const u = evt.message.usage;
 					if (u) {
 						result.usage.input += u.input || 0;
@@ -633,10 +638,7 @@ async function runSingleAttempt(
 					const assistantText = extractTextFromContent(evt.message.content);
 					appendRecentOutput(progress, assistantText.split("\n").slice(-10));
 					// Final assistant message: start the exit drain window.
-					const stopReason = (evt.message as { stopReason?: string }).stopReason;
-					const hasToolCall = Array.isArray(evt.message.content)
-						&& evt.message.content.some((part) => (part as { type?: string }).type === "toolCall");
-					if (stopReason === "stop" && !hasToolCall) {
+					if (terminalAssistantStop) {
 						if (!evt.message.errorMessage && assistantText.trim()) assistantError = undefined;
 						cleanTerminalAssistantStopReceived ||= !evt.message.errorMessage;
 						startFinalDrain();
@@ -890,7 +892,7 @@ async function runSingleAttempt(
 	} else if (result.turnBudgetExceeded && result.turnBudget) {
 		fullOutput = formatTurnBudgetOutput(turnBudgetExceededMessage(result.turnBudget, result.turnBudget.turnCount), fullOutput);
 	} else if (result.wrapUpRequested && result.turnBudget?.outcome === "wrap-up-requested") {
-		const note = turnBudgetSoftNote(result.turnBudget, result.turnBudget.turnCount);
+		const note = turnBudgetSoftNote(result.turnBudget, result.turnBudget.wrapUpRequestedAtTurn ?? result.turnBudget.turnCount);
 		fullOutput = fullOutput.trim() ? `${note}\n\n${fullOutput}` : note;
 	}
 	const completionGuard = result.exitCode === 0 && !result.error && agent.completionGuard !== false

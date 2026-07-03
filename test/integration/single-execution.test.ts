@@ -77,6 +77,9 @@ interface RunSyncResult {
 	finalOutput?: string;
 	interrupted?: boolean;
 	timedOut?: boolean;
+	turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; exceededAtTurn?: number };
+	turnBudgetExceeded?: boolean;
+	wrapUpRequested?: boolean;
 	detached?: boolean;
 	detachedReason?: string;
 	savedOutputPath?: string;
@@ -94,6 +97,27 @@ interface RunSyncResult {
 interface MockPiCallRecord {
 	args?: string[];
 	systemPrompts?: Array<{ mode?: string; path?: string; text?: string; error?: string }>;
+}
+
+function mockAssistantMessage(text: string, stopReason: "stop" | "tool_use" = "stop") {
+	return {
+		type: "message_end",
+		message: {
+			role: "assistant",
+			content: stopReason === "tool_use"
+				? [{ type: "text", text }, { type: "toolCall", name: "bash", arguments: { command: "echo test" } }]
+				: [{ type: "text", text }],
+			model: "mock/test-model",
+			stopReason,
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: { total: 0.001 },
+			},
+		},
+	};
 }
 
 interface ExecutionModule {
@@ -1464,6 +1488,29 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.error, "Subagent timed out after 150ms.");
 		assert.match(result.finalOutput ?? "", /Subagent timed out after 150ms\./);
 		assert.equal(result.progress.status, "failed");
+	});
+
+	it("allows a foreground run to finish on the final turn-budget grace turn", async () => {
+		mockPi.onCall({
+			jsonl: [
+				mockAssistantMessage("working before wrap-up", "tool_use"),
+				mockAssistantMessage("final wrapped output", "stop"),
+			],
+		});
+		const agents = makeAgentConfigs(["worker"]);
+
+		const result = await runSync(tempDir, agents, "worker", "Use the final grace turn to wrap up.", {
+			turnBudget: { maxTurns: 1, graceTurns: 1 },
+			runId: "foreground-turn-budget-soft",
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.turnBudgetExceeded, undefined);
+		assert.equal(result.wrapUpRequested, true);
+		assert.equal(result.turnBudget?.outcome, "wrap-up-requested");
+		assert.equal(result.turnBudget?.turnCount, 2);
+		assert.match(result.finalOutput ?? "", /Turn budget wrap-up was requested after 1 assistant turn/);
+		assert.match(result.finalOutput ?? "", /final wrapped output/);
 	});
 
 	it("does not run acceptance verification after a foreground timeout", async () => {

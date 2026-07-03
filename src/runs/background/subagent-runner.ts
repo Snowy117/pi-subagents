@@ -88,7 +88,7 @@ import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts
 import { acceptanceFailureMessage, aggregateAcceptanceReport, evaluateAcceptance, formatAcceptancePrompt, stripAcceptanceReport } from "../shared/acceptance.ts";
 import { waitForImportedAsyncRoot } from "./chain-root-attachment.ts";
 import { appendRunnerStepsToStatus, consumeChainAppendRequests, countPendingChainAppendRequests } from "./chain-append.ts";
-import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../shared/turn-budget.ts";
+import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, shouldAbortForTurnBudget, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../shared/turn-budget.ts";
 
 interface SubagentRunConfig {
 	id: string;
@@ -282,6 +282,13 @@ function appendRecentStepOutput(step: RunnerStatusStep, lines: string[]): void {
 	}
 }
 
+function isTerminalAssistantStop(message: Message): boolean {
+	const stopReason = (message as { stopReason?: string }).stopReason;
+	const hasToolCall = Array.isArray(message.content)
+		&& message.content.some((part) => (part as { type?: string }).type === "toolCall");
+	return stopReason === "stop" && !hasToolCall;
+}
+
 function resetStepLiveDetail(step: RunnerStatusStep): void {
 	step.currentTool = undefined;
 	step.currentToolArgs = undefined;
@@ -448,10 +455,7 @@ function runPiStreaming(
 					usage.cacheWrite += eventUsage.cacheWrite ?? 0;
 					usage.cost += eventUsage.cost?.total ?? 0;
 				}
-				const stopReason = (event.message as { stopReason?: string }).stopReason;
-				const hasToolCall = Array.isArray(event.message.content)
-					&& event.message.content.some((part) => (part as { type?: string }).type === "toolCall");
-				if (stopReason === "stop" && !hasToolCall) {
+				if (isTerminalAssistantStop(event.message)) {
 					if (!event.message.errorMessage && extractTextFromContent(event.message.content).trim()) assistantError = undefined;
 					cleanTerminalAssistantStopReceived ||= !event.message.errorMessage;
 					startFinalDrain();
@@ -931,6 +935,20 @@ async function runSingleStep(
 			ctx.registerTurnBudgetAbort,
 		);
 		if (run.turnBudget) turnBudget = run.turnBudget;
+		else if (ctx.turnBudget) {
+			const assistantMessages = run.messages.filter((message) => message.role === "assistant");
+			const turnCount = assistantMessages.length;
+			const lastAssistantMessage = assistantMessages.at(-1);
+			if (turnCount > 0 && turnCount < ctx.turnBudget.maxTurns) {
+				turnBudget = { ...ctx.turnBudget, outcome: "within-budget", turnCount };
+			} else if (turnCount >= ctx.turnBudget.maxTurns) {
+				turnBudget = turnBudgetState(
+					ctx.turnBudget,
+					turnCount,
+					shouldAbortForTurnBudget(ctx.turnBudget, turnCount, lastAssistantMessage ? isTerminalAssistantStop(lastAssistantMessage) : false),
+				);
+			}
+		}
 		cleanupTempDir(tempDir);
 
 		const hiddenError = run.exitCode === 0 && !run.error ? detectSubagentError(run.messages) : null;
@@ -1015,7 +1033,7 @@ async function runSingleStep(
 	if (!finalResult?.timedOut && finalResult?.turnBudgetExceeded && turnBudget) {
 		outputForSummary = formatTurnBudgetOutput(turnBudgetExceededMessage(turnBudget, turnBudget.turnCount), outputForSummary);
 	} else if (!finalResult?.timedOut && turnBudget?.outcome === "wrap-up-requested") {
-		const note = turnBudgetSoftNote(turnBudget, turnBudget.turnCount);
+		const note = turnBudgetSoftNote(turnBudget, turnBudget.wrapUpRequestedAtTurn ?? turnBudget.turnCount);
 		outputForSummary = outputForSummary.trim() ? `${note}\n\n${outputForSummary}` : note;
 	}
 	const outputForAcceptance = rawOutput;
@@ -1648,7 +1666,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		statusPayload.lastUpdate = now;
 		writeStatusPayload();
 	};
-	const updateStepTurnBudget = (flatIndex: number, turnCount: number, now: number): void => {
+	const updateStepTurnBudget = (flatIndex: number, turnCount: number, now: number, terminalAssistantStop: boolean): void => {
 		const budget = config.turnBudget;
 		const step = statusPayload.steps[flatIndex];
 		if (!budget || !step || timedOut || turnBudgetExceeded || step.turnBudgetExceeded) return;
@@ -1658,29 +1676,29 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			statusPayload.turnBudget = state;
 			return;
 		}
+		const state = turnBudgetState(budget, turnCount, false);
+		step.turnBudget = state;
+		statusPayload.turnBudget = state;
 		if (!step.wrapUpRequested) {
-			const state = turnBudgetState(budget, turnCount, false);
-			step.turnBudget = state;
 			step.wrapUpRequested = true;
-			statusPayload.turnBudget = state;
 			statusPayload.wrapUpRequested = true;
 			appendRecentStepOutput(step, [turnBudgetSoftNote(budget, turnCount)]);
 		}
-		if (turnCount < budget.maxTurns + budget.graceTurns) return;
-		const state = turnBudgetState(budget, turnCount, true);
+		if (!shouldAbortForTurnBudget(budget, turnCount, terminalAssistantStop)) return;
+		const exceededState = turnBudgetState(budget, turnCount, true);
 		const message = turnBudgetExceededMessage(budget, turnCount);
-		step.turnBudget = state;
+		step.turnBudget = exceededState;
 		step.turnBudgetExceeded = true;
 		step.wrapUpRequested = true;
 		step.error = message;
 		turnBudgetExceeded = true;
-		statusPayload.turnBudget = state;
+		statusPayload.turnBudget = exceededState;
 		statusPayload.turnBudgetExceeded = true;
 		statusPayload.wrapUpRequested = true;
 		statusPayload.error = message;
 		statusPayload.lastUpdate = now;
 		appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.turn_budget_exceeded", ts: now, runId: id, stepIndex: flatIndex, agent: step.agent, turnCount, maxTurns: budget.maxTurns, graceTurns: budget.graceTurns, message }));
-		activeChildTurnBudgetAborts.get(flatIndex)?.(message, state);
+		activeChildTurnBudgetAborts.get(flatIndex)?.(message, exceededState);
 	};
 	const updateStepFromChildEvent = (flatIndex: number, event: ChildEvent): void => {
 		const step = statusPayload.steps[flatIndex];
@@ -1762,7 +1780,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				statusPayload.totalTokens = { input: totalInput + input, output: totalOutput + output, total: totalInput + totalOutput + input + output };
 			}
 			statusPayload.turnCount = Math.max(statusPayload.turnCount ?? 0, step.turnCount);
-			updateStepTurnBudget(flatIndex, step.turnCount, now);
+			updateStepTurnBudget(flatIndex, step.turnCount, now, isTerminalAssistantStop(event.message));
 		}
 		syncTopLevelCurrentTool();
 		step.lastActivityAt = now;
@@ -2861,7 +2879,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
 			...(config.deadlineAt !== undefined ? { deadlineAt: config.deadlineAt } : {}),
 			...(statusPayload.turnBudget ? { turnBudget: statusPayload.turnBudget } : {}),
-			...(statusPayload.turnBudgetExceeded ? { turnBudgetExceeded: true, wrapUpRequested: statusPayload.wrapUpRequested } : {}),
+			...(statusPayload.turnBudgetExceeded ? { turnBudgetExceeded: true } : {}),
+			...(statusPayload.wrapUpRequested ? { wrapUpRequested: true } : {}),
 			...(timedOut ? { timedOut: true, error: timeoutMessage ?? "Subagent timed out." } : turnBudgetExceeded ? { error: statusPayload.error ?? "Subagent exceeded turn budget." } : {}),
 			results: results.map((r) => ({
 				agent: r.agent,
