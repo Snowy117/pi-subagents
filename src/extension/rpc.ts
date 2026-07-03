@@ -7,6 +7,7 @@ import { deliverTimeoutRequest } from "../runs/background/control-channel.ts";
 import { reconcileAsyncRun } from "../runs/background/stale-run-reconciler.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { type Details, ASYNC_DIR, RESULTS_DIR } from "../shared/types.ts";
+import { readStatus } from "../shared/utils.ts";
 import { SubagentParams } from "./schemas.ts";
 
 export const SUBAGENT_RPC_PROTOCOL_VERSION = 1;
@@ -206,6 +207,7 @@ function spawnParams(params: unknown): SubagentParamsLike {
 function stopAsyncRun(
 	params: unknown,
 	options: RegisterSubagentRpcBridgeOptions,
+	ctx: ExtensionContext,
 ): { runId: string; asyncDir: string; previousState: string; state: "stopping"; message: string } {
 	const target = normalizeTargetParams(params, "stop");
 	assertSubagentParams({ action: "status", ...target }, "RPC stop target params");
@@ -221,14 +223,25 @@ function stopAsyncRun(
 		throw new SubagentRpcError("not_found", "Async run not found or already completed; stop requires a live async run directory.");
 	}
 
+	const currentSessionId = ctx.sessionManager.getSessionId();
+	const initialStatus = readStatus(location.asyncDir);
+	const initialRunId = initialStatus?.runId ?? location.resolvedId ?? path.basename(location.asyncDir);
+	if (!initialStatus) throw new SubagentRpcError("not_found", `Status file not found for async run '${initialRunId}'.`);
+	if (!currentSessionId || initialStatus.sessionId !== currentSessionId) {
+		throw new SubagentRpcError("not_found", `Async run '${initialRunId}' was not found in the active session.`);
+	}
+
 	let status;
 	try {
 		status = reconcileAsyncRun(location.asyncDir, { resultsDir, kill: options.kill, now: options.now }).status;
 	} catch (error) {
 		throw new SubagentRpcError("execution_failed", error instanceof Error ? error.message : String(error));
 	}
-	const runId = status?.runId ?? location.resolvedId ?? path.basename(location.asyncDir);
+	const runId = status?.runId ?? initialRunId;
 	if (!status) throw new SubagentRpcError("not_found", `Status file not found for async run '${runId}'.`);
+	if (status.sessionId !== currentSessionId) {
+		throw new SubagentRpcError("not_found", `Async run '${runId}' was not found in the active session.`);
+	}
 	if (status.state !== "running") {
 		throw new SubagentRpcError("invalid_state", `Async run ${runId} is ${status.state}; stop only supports running async runs.`);
 	}
@@ -272,7 +285,7 @@ async function handleRequest(
 		return executeChecked(options, ctx, request.requestId, request.method, { action: "interrupt", ...normalizeTargetParams(request.params, "interrupt") });
 	}
 	if (request.method === "stop") {
-		return stopAsyncRun(request.params, options);
+		return stopAsyncRun(request.params, options, ctx);
 	}
 	throw new SubagentRpcError("unsupported_method", `Unsupported subagent RPC method: ${String(request.method)}`);
 }
@@ -295,10 +308,16 @@ function parseRequest(raw: unknown): SubagentRpcRequestEnvelope {
 	};
 }
 
-function errorReply(raw: unknown, error: unknown): SubagentRpcReplyEnvelope {
-	const requestId = isRecord(raw) && typeof raw.requestId === "string" && raw.requestId.trim()
-		? raw.requestId
+function safeReplyRequestId(raw: unknown): string {
+	if (!isRecord(raw)) return "unknown";
+	const requestId = raw.requestId;
+	return typeof requestId === "string" && requestId.trim().length > 0 && !/[\r\n]/.test(requestId)
+		? requestId
 		: "unknown";
+}
+
+function errorReply(raw: unknown, error: unknown): SubagentRpcReplyEnvelope {
+	const requestId = safeReplyRequestId(raw);
 	const method = isRecord(raw) && typeof raw.method === "string" && (SUBAGENT_RPC_METHODS as readonly string[]).includes(raw.method)
 		? raw.method as SubagentRpcMethod
 		: undefined;

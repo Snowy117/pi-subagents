@@ -14,6 +14,7 @@ import {
 } from "../../src/extension/rpc.ts";
 
 class FakeEvents {
+	readonly emitted: Array<{ event: string; data: unknown }> = [];
 	private handlers = new Map<string, Array<(data: unknown) => void>>();
 
 	on(event: string, handler: (data: unknown) => void): () => void {
@@ -27,6 +28,7 @@ class FakeEvents {
 	}
 
 	emit(event: string, data: unknown): void {
+		this.emitted.push({ event, data });
 		for (const handler of [...(this.handlers.get(event) ?? [])]) handler(data);
 	}
 }
@@ -81,6 +83,31 @@ describe("subagent extension RPC bridge", () => {
 		assert.equal(reply.success, true);
 		assert.equal(reply.method, "ping");
 		assert.equal((reply as { data: { version?: number } }).data.version, SUBAGENT_RPC_PROTOCOL_VERSION);
+
+		bridge.dispose();
+	});
+
+	it("replies to malformed request ids on the safe unknown channel", async () => {
+		const events = new FakeEvents();
+		const bridge = registerSubagentRpcBridge({
+			events,
+			getContext: () => ctx(),
+			execute: async () => assert.fail("malformed request should not call executor"),
+		});
+		const unsafeRequestId = "bad\nchannel";
+		const replyPromise = once(events, subagentRpcReplyEvent("unknown")) as Promise<SubagentRpcReplyEnvelope>;
+
+		events.emit(SUBAGENT_RPC_REQUEST_EVENT, {
+			version: SUBAGENT_RPC_PROTOCOL_VERSION,
+			requestId: unsafeRequestId,
+			method: "ping",
+		});
+		const reply = await replyPromise;
+
+		assert.equal(reply.success, false);
+		assert.equal(reply.requestId, "unknown");
+		assert.equal((reply as { error: { code: string } }).error.code, "invalid_request");
+		assert.equal(events.emitted.some((entry) => entry.event === subagentRpcReplyEvent(unsafeRequestId)), false);
 
 		bridge.dispose();
 	});
@@ -188,6 +215,7 @@ describe("subagent extension RPC bridge", () => {
 			fs.mkdirSync(asyncDir, { recursive: true });
 			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
 				runId: "run-stop",
+				sessionId: "session-123",
 				mode: "single",
 				state: "running",
 				pid: 4242,
@@ -211,6 +239,52 @@ describe("subagent extension RPC bridge", () => {
 			assert.equal((reply as { data: { runId?: string; state?: string } }).data.runId, "run-stop");
 			assert.equal((reply as { data: { state?: string } }).data.state, "stopping");
 			assert.equal(fs.existsSync(timeoutRequestPath(asyncDir)), true);
+
+			bridge.dispose();
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects stop requests for async runs from a different session", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-rpc-stop-session-"));
+		try {
+			const events = new FakeEvents();
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			const asyncDir = path.join(asyncRoot, "run-other-session");
+			let killCalls = 0;
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId: "run-other-session",
+				sessionId: "other-session",
+				mode: "single",
+				state: "running",
+				pid: 4242,
+				startedAt: 100,
+				lastUpdate: 100,
+				steps: [{ agent: "worker", status: "running", startedAt: 100 }],
+			}, null, 2), "utf-8");
+			const bridge = registerSubagentRpcBridge({
+				events,
+				getContext: () => ctx(),
+				execute: async () => assert.fail("stop should not call executor"),
+				asyncDirRoot: asyncRoot,
+				resultsDir,
+				kill: () => {
+					killCalls++;
+					return true;
+				},
+				now: () => 150,
+			});
+
+			const reply = await request(events, "stop-other-session", "stop", { id: "run-other-session" });
+
+			assert.equal(reply.success, false);
+			assert.equal((reply as { error: { code: string; message: string } }).error.code, "not_found");
+			assert.match((reply as { error: { message: string } }).error.message, /active session/);
+			assert.equal(fs.existsSync(timeoutRequestPath(asyncDir)), false);
+			assert.equal(killCalls, 0);
 
 			bridge.dispose();
 		} finally {
