@@ -56,6 +56,7 @@ import {
 	type IntercomEventBus,
 	type NestedRouteInfo,
 	type ResolvedControlConfig,
+	type ResolvedTurnBudget,
 	type SingleResult,
 	MAX_CONCURRENCY,
 	resolveChildMaxSubagentDepth,
@@ -143,6 +144,7 @@ interface ParallelChainRunInput {
 	nestedRoute?: NestedRouteInfo;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	turnBudget?: ResolvedTurnBudget;
 	globalSemaphore?: Semaphore;
 }
 
@@ -310,6 +312,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				acceptanceContext: { mode: "chain" },
 				timeoutMs: input.timeoutMs,
 				deadlineAt: input.deadlineAt,
+				turnBudget: input.turnBudget,
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -418,6 +421,7 @@ interface ChainExecutionParams {
 	worktreeBaseDir?: string;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	turnBudget?: ResolvedTurnBudget;
 	/** Global cap on simultaneously-running tasks within this chain. Defaults to DEFAULT_GLOBAL_CONCURRENCY_LIMIT. */
 	globalConcurrencyLimit?: number;
 }
@@ -706,6 +710,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					maxSubagentDepth: params.maxSubagentDepth,
 					timeoutMs: params.timeoutMs,
 					deadlineAt,
+					turnBudget: params.turnBudget,
 					globalSemaphore,
 				});
 				globalTaskIndex += step.parallel.length;
@@ -921,6 +926,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				maxSubagentDepth: params.maxSubagentDepth,
 				timeoutMs: params.timeoutMs,
 				deadlineAt,
+				turnBudget: params.turnBudget,
 				globalSemaphore,
 			});
 			globalTaskIndex = dynamicStartIndex + reservedDynamicItems;
@@ -1136,6 +1142,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				acceptanceContext: { mode: "chain" },
 				timeoutMs: params.timeoutMs,
 				deadlineAt,
+				turnBudget: params.turnBudget,
 				onUpdate: onUpdate
 					? (p) => {
 						const stepResults = p.details?.results || [];
