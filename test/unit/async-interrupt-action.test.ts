@@ -109,6 +109,24 @@ describe("async interrupt action", () => {
 		}
 	});
 
+	it("queues steering for a running async child by directory", async () => {
+		const state = createState();
+		const runId = `steer-dir-${Date.now().toString(36)}`;
+		const asyncDir = createRunningAsync(state, runId, { track: false });
+		try {
+			const result = await executorWithKill(state, () => true)
+				.execute("steer", { action: "steer", dir: asyncDir, message: "Focus on validation." }, new AbortController().signal, undefined, ctx());
+
+			assert.equal(result.isError, undefined);
+			assert.match(text(result), new RegExp(`Steering queued for async run ${runId}`));
+			const requests = consumeSteerRequests(asyncDir);
+			assert.equal(requests.length, 1);
+			assert.equal(requests[0]?.message, "Focus on validation.");
+		} finally {
+			cleanup(runId, asyncDir);
+		}
+	});
+
 	it("queues steering for a pending indexed async child", async () => {
 		const state = createState();
 		const runId = `steer-pending-${Date.now().toString(36)}`;

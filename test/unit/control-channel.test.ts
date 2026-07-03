@@ -93,6 +93,42 @@ describe("control channel: request file", () => {
 		}
 	});
 
+	it("keeps steer request ids out of filesystem paths", () => {
+		const asyncDir = tmpAsyncDir("pi-control-steer-safe-name-");
+		try {
+			const requestPath = requestAsyncSteer(asyncDir, { message: "safe", id: "../outside\\bad:thing", ts: 1 });
+			assert.equal(path.dirname(requestPath), steerRequestsDir(asyncDir));
+			assert.equal(path.basename(requestPath), `0000000000001-${Buffer.from("../outside\\bad:thing").toString("base64url")}.json`);
+			assert.deepEqual(consumeSteerRequests(asyncDir), [
+				{ type: "steer", id: "../outside\\bad:thing", ts: 1, message: "safe" },
+			]);
+		} finally {
+			cleanup(asyncDir);
+		}
+	});
+
+	it("does not deliver a steer request if another consumer removed it first", () => {
+		const asyncDir = tmpAsyncDir("pi-control-steer-concurrent-");
+		try {
+			requestAsyncSteer(asyncDir, { message: "already taken", id: "s", ts: 1 });
+			const fsImpl = {
+				existsSync: fs.existsSync,
+				readdirSync: fs.readdirSync,
+				readFileSync: fs.readFileSync,
+				rmSync: (target: fs.PathLike, options?: fs.RmOptions) => {
+					fs.rmSync(target, options);
+					const error = new Error("already removed") as NodeJS.ErrnoException;
+					error.code = "ENOENT";
+					throw error;
+				},
+			};
+			assert.deepEqual(consumeSteerRequests(asyncDir, fsImpl), []);
+			assert.deepEqual(consumeSteerRequests(asyncDir), []);
+		} finally {
+			cleanup(asyncDir);
+		}
+	});
+
 	it("enqueues a steer request for a specific child inbox", () => {
 		const asyncDir = tmpAsyncDir("pi-control-step-steer-");
 		try {

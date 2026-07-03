@@ -83,7 +83,7 @@ export function stepSteerInboxDir(asyncDir: string, index: number): string {
 }
 
 function steerRequestFileName(request: SteerRequest): string {
-	return `${String(request.ts).padStart(13, "0")}-${request.id}.json`;
+	return `${String(request.ts).padStart(13, "0")}-${Buffer.from(request.id).toString("base64url")}.json`;
 }
 
 export function writeSteerRequestToDir(dir: string, request: SteerRequest): string {
@@ -154,7 +154,7 @@ function parseSteerRequest(raw: unknown): SteerRequest | undefined {
 	if (input.targetIndex !== undefined && (!Number.isInteger(input.targetIndex) || input.targetIndex < 0)) return undefined;
 	return {
 		type: "steer",
-		id: input.id,
+		id: input.id.trim(),
 		ts: input.ts,
 		message: input.message.trim(),
 		...(input.targetIndex !== undefined ? { targetIndex: input.targetIndex } : {}),
@@ -174,7 +174,7 @@ export function consumeSteerRequestsFromDir(dir: string, fsImpl: Pick<typeof fs,
 			parsed = undefined;
 		}
 		try {
-			fsImpl.rmSync(requestPath, { force: true, recursive: true });
+			fsImpl.rmSync(requestPath, { recursive: true });
 		} catch {
 			// Already removed by a concurrent check — do not execute it twice.
 			continue;
