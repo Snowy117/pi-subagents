@@ -1388,7 +1388,13 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		userSettingsPath,
 		projectSettingsPath,
 	);
-	const packageAgents = applySubagentDefaultModel(packageSubagentPaths.agents.flatMap((dir) => loadAgentsFromDir(dir, "package")), defaultModel);
+	const packageAgents = applyCustomAgentOverrides(
+		applySubagentDefaultModel(packageSubagentPaths.agents.flatMap((dir) => loadAgentsFromDir(dir, "package")), defaultModel),
+		userSettings,
+		projectSettings,
+		userSettingsPath,
+		projectSettingsPath,
+	);
 	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents, packageAgents)
 		.filter((agent) => agent.disabled !== true);
 
@@ -1445,7 +1451,13 @@ export function discoverAgentsAll(cwd: string): {
 			if (!packageMap.has(agent.name)) packageMap.set(agent.name, agent);
 		}
 	}
-	const packageAgents = applySubagentDefaultModel(Array.from(packageMap.values()), defaultModel);
+	const packageAgents = applyCustomAgentOverrides(
+		applySubagentDefaultModel(Array.from(packageMap.values()), defaultModel),
+		userSettings,
+		projectSettings,
+		userSettingsPath,
+		projectSettingsPath,
+	);
 	const projectMap = new Map<string, AgentConfig>();
 	for (const dir of projectDirs) {
 		for (const agent of loadAgentsFromDir(dir, "project")) {

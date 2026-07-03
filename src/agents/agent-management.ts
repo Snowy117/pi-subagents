@@ -75,6 +75,12 @@ function asDisambiguationScope(scope: unknown): ManagementScope | undefined {
 	return undefined;
 }
 
+function actionScope(scope: unknown, action: ManagementAction): { scope?: ManagementScope; error?: AgentToolResult<Details> } {
+	if (scope === undefined) return { scope: "user" };
+	const parsed = asDisambiguationScope(scope);
+	return parsed ? { scope: parsed } : { error: result(`agentScope must be 'user' or 'project' for ${action}.`, true) };
+}
+
 function normalizeListScope(scope: unknown): AgentScope | undefined {
 	if (scope === undefined) return "both";
 	if (scope === "user" || scope === "project" || scope === "both") return scope;
@@ -887,9 +893,11 @@ function handleEject(params: ManagementParams, ctx: ManagementContext): AgentToo
 	if (!params.agent) return result("Specify 'agent' for eject.", true);
 	const raw = params.agent.trim();
 	const sanitized = sanitizeName(raw);
-	const scope = asDisambiguationScope(params.agentScope) ?? "user";
+	const parsedScope = actionScope(params.agentScope, "eject");
+	if (parsedScope.error) return parsedScope.error;
+	const scope = parsedScope.scope!;
 	const d = discoverAgentsAll(ctx.cwd);
-	const source = [...d.builtin, ...d.package].find((a) => a.name === raw || a.name === sanitized);
+	const source = [...d.package, ...d.builtin].find((a) => a.name === raw || a.name === sanitized);
 	if (!source) {
 		return result(`Agent '${raw}' not found or is not a bundled/package agent. eject copies a builtin or package agent to ${scope} scope so it can be customized. Available: ${availableNames(ctx.cwd, "agent").join(", ") || "none"}.`, true);
 	}
@@ -922,7 +930,9 @@ function handleEject(params: ManagementParams, ctx: ManagementContext): AgentToo
 function handleDisable(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent) return result("Specify 'agent' for disable.", true);
 	const raw = params.agent.trim();
-	const scope = asDisambiguationScope(params.agentScope) ?? "user";
+	const parsedScope = actionScope(params.agentScope, "disable");
+	if (parsedScope.error) return parsedScope.error;
+	const scope = parsedScope.scope!;
 	const d = discoverAgentsAll(ctx.cwd);
 	if (scope === "project" && d.projectSettingsPath === null) {
 		return result("Project override is not available here: no project config root (.pi or .agents) was found above the cwd. Use agentScope: 'user' or run from inside a project.", true);
@@ -943,7 +953,9 @@ function handleDisable(params: ManagementParams, ctx: ManagementContext): AgentT
 function handleEnable(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent) return result("Specify 'agent' for enable.", true);
 	const raw = params.agent.trim();
-	const scope = asDisambiguationScope(params.agentScope) ?? "user";
+	const parsedScope = actionScope(params.agentScope, "enable");
+	if (parsedScope.error) return parsedScope.error;
+	const scope = parsedScope.scope!;
 	const d = discoverAgentsAll(ctx.cwd);
 	if (scope === "project" && d.projectSettingsPath === null) {
 		return result("Project override is not available here: no project config root (.pi or .agents) was found above the cwd. Use agentScope: 'user' or run from inside a project.", true);
@@ -969,12 +981,14 @@ function handleReset(params: ManagementParams, ctx: ManagementContext): AgentToo
 	if (!params.agent) return result("Specify 'agent' for reset.", true);
 	const raw = params.agent.trim();
 	const sanitized = sanitizeName(raw);
-	const scope = asDisambiguationScope(params.agentScope) ?? "user";
+	const parsedScope = actionScope(params.agentScope, "reset");
+	if (parsedScope.error) return parsedScope.error;
+	const scope = parsedScope.scope!;
 	const d = discoverAgentsAll(ctx.cwd);
 	if (scope === "project" && d.projectSettingsPath === null) {
 		return result("Project override is not available here: no project config root (.pi or .agents) was found above the cwd. Use agentScope: 'user' or run from inside a project.", true);
 	}
-	const bundled = [...d.builtin, ...d.package].find((a) => a.name === raw || a.name === sanitized);
+	const bundled = [...d.package, ...d.builtin].find((a) => a.name === raw || a.name === sanitized);
 	if (!bundled) {
 		const custom = [...d.user, ...d.project].find((a) => a.name === raw || a.name === sanitized);
 		if (custom) {

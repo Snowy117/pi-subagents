@@ -43,6 +43,19 @@ function projectAgentPath(name: string): string {
 	return path.join(tempDir, ".pi", "agents", `${name}.md`);
 }
 
+function packageAgentPath(name: string): string {
+	return path.join(tempDir, "packaged-agents", `${name}.md`);
+}
+
+function writePackageAgent(name: string): void {
+	writeJson(path.join(tempDir, "package.json"), {
+		name: "test-package",
+		pi: { subagents: { agents: ["./packaged-agents"] } },
+	});
+	fs.mkdirSync(path.dirname(packageAgentPath(name)), { recursive: true });
+	fs.writeFileSync(packageAgentPath(name), `---\nname: ${name}\ndescription: Packaged agent\n---\n\nPackaged.\n`, "utf-8");
+}
+
 describe("agent eject/disable/enable/reset management actions", () => {
 	beforeEach(() => {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-eject-"));
@@ -86,6 +99,25 @@ describe("agent eject/disable/enable/reset management actions", () => {
 			assert.match(readText(ejected), /to project scope/);
 			assert.equal(fs.existsSync(projectAgentPath("scout")), true);
 			assert.equal(discoverAgentsAll(tempDir).project.find((a) => a.name === "scout")?.source, "project");
+		});
+
+		it("copies a package agent that shadows a builtin by runtime precedence", () => {
+			const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+			writePackageAgent("reviewer");
+			assert.equal(discoverAgents(tempDir, "both").agents.find((a) => a.name === "reviewer")?.source, "package");
+
+			const ejected = handleManagementAction("eject", { agent: "reviewer" }, ctx);
+			assert.equal(ejected.isError, false);
+			assert.match(readText(ejected), /from package to user scope/);
+			assert.equal(fs.readFileSync(userAgentPath("reviewer"), "utf-8"), fs.readFileSync(packageAgentPath("reviewer"), "utf-8"));
+		});
+
+		it("refuses invalid management scopes without writing user files", () => {
+			const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+			const ejected = handleManagementAction("eject", { agent: "reviewer", agentScope: "workspace" }, ctx);
+			assert.equal(ejected.isError, true);
+			assert.match(readText(ejected), /agentScope must be 'user' or 'project'/);
+			assert.equal(fs.existsSync(userAgentPath("reviewer")), false);
 		});
 
 		it("refuses to eject when a custom agent already exists", () => {
@@ -170,6 +202,20 @@ describe("agent eject/disable/enable/reset management actions", () => {
 			const disabled = handleManagementAction("disable", { agent: "helper" }, ctx);
 			assert.equal(disabled.isError, false);
 			assert.equal(discoverAgents(tempDir, "both").agents.find((a) => a.name === "helper"), undefined);
+		});
+
+		it("also disables a package agent via a settings override", () => {
+			const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+			writePackageAgent("packaged-reviewer");
+			assert.equal(discoverAgents(tempDir, "both").agents.find((a) => a.name === "packaged-reviewer")?.source, "package");
+
+			const disabled = handleManagementAction("disable", { agent: "packaged-reviewer" }, ctx);
+			assert.equal(disabled.isError, false);
+			assert.equal(discoverAgents(tempDir, "both").agents.find((a) => a.name === "packaged-reviewer"), undefined);
+
+			const all = discoverAgentsAll(tempDir).package.find((a) => a.name === "packaged-reviewer");
+			assert.equal(all?.disabled, true);
+			assert.equal(all?.override?.scope, "user");
 		});
 	});
 
