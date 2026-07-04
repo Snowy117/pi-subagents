@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Avoid completion-guard failures for read-only issue-drafting tasks that mention suggested fixes while preserving mutation expectations for real implementation tasks.
+
 ## [0.33.1] - 2026-07-03
 
 ### Fixed
