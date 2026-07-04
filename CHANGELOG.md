@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Added `waitTool` config and `PI_SUBAGENT_WAIT_TOOL_ENABLED` so interactive users can keep the `wait` tool registered while making it return immediately instead of blocking on background subagents.
+
 ## [0.33.1] - 2026-07-03
 
 ### Fixed
