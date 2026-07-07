@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-07-07
+
 ### Added
 - Added `waitTool` config and `PI_SUBAGENT_WAIT_TOOL_ENABLED` so interactive users can keep the `wait` tool registered while making it return immediately instead of blocking on background subagents.
 
@@ -9,6 +11,7 @@
 - Coerce agent frontmatter `thinking: false` to disabled thinking so child model IDs do not gain invalid `:false` suffixes.
 - Suppress stale native supervisor-channel asks after replies, expiry, or inactive child runs, and clean cancelled child requests so `subagent_supervisor` and visible intercom notices stay aligned.
 - Avoid completion-guard failures for read-only issue-drafting tasks that mention suggested fixes while preserving mutation expectations for real implementation tasks.
+- Prune stale empty native supervisor-channel directories before polling while preserving fresh or non-empty channels.
 
 ## [0.33.1] - 2026-07-03
 
