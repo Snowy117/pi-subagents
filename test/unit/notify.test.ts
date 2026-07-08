@@ -107,14 +107,12 @@ describe("registerSubagentNotify", () => {
 		});
 
 		assert.equal(sent.length, 1);
-		assert.deepEqual(sent[0], {
-			message: {
-				customType: "subagent-notify",
-				content: "Background task completed: **worker**\n\n(no output)",
-				display: true,
-			},
-			options: { triggerTurn: true },
-		});
+		assert.equal(sent[0]!.options.triggerTurn, true);
+		const content0 = (sent[0]!.message as { content: string }).content;
+		assert.match(content0, /Background task completed: \*\*worker\*\*\n\n\(no output\)/);
+		assert.match(content0, /SYSTEM-AUTHORED MESSAGE/);
+		assert.match(content0, /Source: subagent completion notification/);
+		assert.match(content0, /Subagent liveness at delivery: FINISHED/);
 	});
 
 	it("preserves non-empty completion summaries", () => {
@@ -134,14 +132,10 @@ describe("registerSubagentNotify", () => {
 		});
 
 		assert.equal(sent.length, 1);
-		assert.deepEqual(sent[0], {
-			message: {
-				customType: "subagent-notify",
-				content: `Background task completed: **worker** (2/3)\n\n${summary}`,
-				display: true,
-			},
-			options: { triggerTurn: true },
-		});
+		assert.equal(sent[0]!.options.triggerTurn, true);
+		const content0 = (sent[0]!.message as { content: string }).content;
+		assert.ok(content0.includes(`Background task completed: **worker** (2/3)\n\n${summary}`), content0);
+		assert.match(content0, /SYSTEM-AUTHORED MESSAGE/);
 	});
 
 	it("preserves session paths in notification content", () => {
@@ -158,14 +152,11 @@ describe("registerSubagentNotify", () => {
 			sessionId: "session-1",
 		});
 
-		assert.deepEqual(sent, [{
-			message: {
-				customType: "subagent-notify",
-				content: "Background task completed: **worker**\n\nDone\n\nSession file: /tmp/session.jsonl",
-				display: true,
-			},
-			options: { triggerTurn: true },
-		}]);
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0]!.options.triggerTurn, true);
+		const content0 = (sent[0]!.message as { content: string }).content;
+		assert.match(content0, /Background task completed: \*\*worker\*\*\n\nDone\n\nSession file: \/tmp\/session\.jsonl/);
+		assert.match(content0, /SYSTEM-AUTHORED MESSAGE/);
 	});
 
 	it("labels paused completions as paused even without an exit code", () => {
@@ -182,14 +173,10 @@ describe("registerSubagentNotify", () => {
 		});
 
 		assert.equal(sent.length, 1);
-		assert.deepEqual(sent[0], {
-			message: {
-				customType: "subagent-notify",
-				content: "Background task paused: **worker**\n\nPaused after interrupt. Waiting for explicit next action.",
-				display: true,
-			},
-			options: { triggerTurn: true },
-		});
+		assert.equal(sent[0]!.options.triggerTurn, true);
+		const content0 = (sent[0]!.message as { content: string }).content;
+		assert.match(content0, /Background task paused: \*\*worker\*\*\n\nPaused after interrupt\. Waiting for explicit next action\./);
+		assert.match(content0, /SYSTEM-AUTHORED MESSAGE/);
 	});
 
 	it("ignores completions for other or missing session ids", () => {
@@ -245,9 +232,10 @@ describe("registerSubagentNotify", () => {
 		clock.advance(150);
 		assert.equal(sent.length, 1);
 		const content = (sent[0]!.message as { content: string }).content;
-		assert.match(content, /^Background tasks completed \(3\): \*\*alpha\*\*, \*\*beta\*\*, \*\*gamma\*\*/);
+		assert.match(content, /Background tasks completed \(3\): \*\*alpha\*\*, \*\*beta\*\*, \*\*gamma\*\*/);
 		assert.match(content, /1\. alpha\nalpha done/);
 		assert.match(content, /3\. gamma\ngamma done/);
+		assert.match(content, /SYSTEM-AUTHORED MESSAGE/);
 		assert.deepEqual(sent[0]!.options, { triggerTurn: true });
 	});
 
@@ -260,7 +248,7 @@ describe("registerSubagentNotify", () => {
 		clock.advance(150);
 
 		assert.equal(sent.length, 1);
-		assert.match((sent[0]!.message as { content: string }).content, /^Background task completed: \*\*alpha\*\*/);
+		assert.match((sent[0]!.message as { content: string }).content, /Background task completed: \*\*alpha\*\*/);
 		assert.doesNotMatch((sent[0]!.message as { content: string }).content, /beta done/);
 	});
 
@@ -274,7 +262,7 @@ describe("registerSubagentNotify", () => {
 
 		clock.advance(150);
 		assert.equal(sent.length, 1);
-		assert.match((sent[0]!.message as { content: string }).content, /^Background task completed: \*\*alpha\*\*/);
+		assert.match((sent[0]!.message as { content: string }).content, /Background task completed: \*\*alpha\*\*/);
 		assert.doesNotMatch((sent[0]!.message as { content: string }).content, /boom/);
 	});
 });
