@@ -1,0 +1,36 @@
+{
+  "enableSkillCommands": true,
+  "packages": [
+    "git:github.com/Snowy117/pi-subagents",
+    "git:github.com/Snowy117/pi-intercom@feat/system-message-template-and-liveness",
+    "git:github.com/Snowy117/pi-lsp-extension@fix/pull-diagnostics-and-protocol-import"
+  ],
+  "extensions": [
+    "./extensions/trellis/index.ts"
+  ],
+  "skills": [
+    "./skills"
+  ],
+  "prompts": [
+    "./prompts"
+  ],
+  "subagents": {
+    "agentOverrides": {
+      "trellis-implement": {
+        "defaultContext": "fresh"
+      },
+      "trellis-ui-implement": {
+        "defaultContext": "fresh"
+      },
+      "trellis-test": {
+        "defaultContext": "fresh"
+      },
+      "trellis-check": {
+        "defaultContext": "fresh"
+      },
+      "trellis-research": {
+        "defaultContext": "fresh"
+      }
+    }
+  }
+}
