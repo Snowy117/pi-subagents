@@ -510,7 +510,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				cwd: tempDir,
 				steps: [
 					{ agent: "a", status: "complete", sessionFile: firstSession },
-					{ agent: "b", status: "complete", sessionFile: secondSession },
+					{ agent: "b", status: "complete", sessionFile: secondSession, model: "anthropic/claude-sonnet-4", thinking: "high" },
 				],
 			}, null, 2), "utf-8");
 			const { executor } = makeExecutor({ agents: [makeAgent("a"), makeAgent("b")] });
@@ -529,6 +529,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			assert.match(result.content[0]?.text ?? "", new RegExp(secondSession.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 			const args = await readMockCallArgs(0);
 			assert.equal(args[args.indexOf("--session") + 1], secondSession);
+			assert.equal(args[args.indexOf("--model") + 1], "anthropic/claude-sonnet-4:high");
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 		}
@@ -820,6 +821,18 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		assert.equal(detachEmitted, true);
 		const runId = original.details?.runId;
 		assert.ok(runId, "expected foreground run id");
+
+		const fleet = await executor.execute(
+			"foreground-detached-fleet",
+			{ action: "status", view: "fleet" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		const fleetText = fleet.content[0]?.text ?? "";
+		assert.match(fleetText, /Detached foreground runs:/);
+		assert.ok(fleetText.includes(runId));
+		assert.match(fleetText, /recovery: reply to the supervisor request first/);
 
 		const resumed = await executor.execute(
 			"foreground-detached-resume",

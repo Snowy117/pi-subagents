@@ -181,6 +181,12 @@ export interface CompletionBatchConfig {
 	stragglerWindowMs?: number;
 }
 
+export interface WaitToolConfigObject {
+	enabled?: boolean;
+}
+
+export type WaitToolConfig = boolean | WaitToolConfigObject;
+
 export interface ControlEvent {
 	type: ControlEventType;
 	from?: ActivityState;
@@ -814,6 +820,9 @@ export interface ForegroundResumeChild {
 	status: SubagentResultStatus;
 	exitCode?: number;
 	finalOutput?: string;
+	outputMode?: OutputMode;
+	savedOutputPath?: string;
+	outputSaveError?: string;
 	artifactPaths?: ArtifactPaths;
 	transcriptPath?: string;
 	transcriptError?: string;
@@ -1000,6 +1009,7 @@ export interface ExtensionConfig {
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to full. */
 	toolDescriptionMode?: ToolDescriptionMode;
 	forceTopLevelAsync?: boolean;
+	waitTool?: WaitToolConfig;
 	defaultSessionDir?: string;
 	singleRunOutputBaseDir?: string;
 	maxSubagentDepth?: number;
