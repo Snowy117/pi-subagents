@@ -98,6 +98,7 @@ import {
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
 	SUBAGENT_ACTIONS,
+	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	checkSubagentDepth,
@@ -382,6 +383,56 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		...(input.result.detachedReason ? { detachedReason: input.result.detachedReason } : {}),
 	};
 	trimRememberedForegroundRuns(state);
+}
+
+/**
+ * Foreground-detached children are tracked only in memory, so the
+ * result-watcher (which drives async completion notifications) never sees
+ * them. Emit its completion event here so the parent is notified, and
+ * deliver a best-effort intercom result receipt mirroring the async path.
+ */
+export function notifyForegroundDetachedCompletion(input: {
+	events: IntercomEventBus;
+	state: SubagentState;
+	runId: string;
+	mode: SubagentRunMode;
+	index: number;
+	result: SingleResult;
+	orchestratorIntercomTarget?: string;
+}): void {
+	const sessionId = input.state.currentSessionId;
+	const success = input.result.exitCode === 0 && !input.result.error;
+	const summary = input.result.finalOutput ?? input.result.error ?? "";
+	input.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+		id: input.runId,
+		agent: input.result.agent,
+		success,
+		summary,
+		...(input.result.exitCode !== undefined ? { exitCode: input.result.exitCode } : {}),
+		...(input.result.interrupted ? { state: "paused" } : {}),
+		timestamp: Date.now(),
+		...(input.result.progressSummary?.durationMs !== undefined ? { durationMs: input.result.progressSummary.durationMs } : {}),
+		...(input.result.sessionFile ? { sessionFile: input.result.sessionFile } : {}),
+		sessionId,
+		taskIndex: input.index,
+		...(input.mode === "single" ? { totalTasks: 1 } : {}),
+	});
+	if (input.orchestratorIntercomTarget) {
+		const status = resolveSubagentResultStatus({ exitCode: input.result.exitCode, interrupted: input.result.interrupted, success });
+		void deliverSubagentResultIntercomEvent(input.events, {
+			to: input.orchestratorIntercomTarget,
+			runId: input.runId,
+			mode: input.mode,
+			source: "foreground",
+			children: [{
+				agent: input.result.agent,
+				status,
+				summary: summary.trim() || "(no output)",
+				index: input.index,
+				...(input.result.sessionFile ? { sessionPath: input.result.sessionFile } : {}),
+			}],
+		}).catch(() => undefined);
+	}
 }
 
 function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState): { runId: string; mode: "single" | "parallel" | "chain"; state: "complete"; agent: string; index: number; intercomTarget: string; cwd: string; sessionFile: string } | undefined {
@@ -2036,7 +2087,10 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		timeoutMs: data.timeoutMs,
 		deadlineAt: data.deadlineAt,
 		turnBudget: data.turnBudget,
-		onDetachedExit: (index, result) => updateRememberedForegroundChild(deps.state, { runId, mode: "chain", cwd: effectiveCwd, index, result }),
+		onDetachedExit: (index, result) => {
+			updateRememberedForegroundChild(deps.state, { runId, mode: "chain", cwd: effectiveCwd, index, result });
+			notifyForegroundDetachedCompletion({ events: deps.pi.events, state: deps.state, runId, mode: "chain", index, result, orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined });
+		},
 		toolBudget: data.toolBudget,
 		configToolBudget: data.configToolBudget,
 		globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
@@ -2330,7 +2384,10 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			maxSubagentDepth: input.maxSubagentDepths[index],
 			controlConfig: input.controlConfig,
 			onControlEvent: input.onControlEvent,
-			onDetachedExit: (result) => updateRememberedForegroundChild(input.state, { runId: input.runId, mode: "parallel", cwd: taskCwd, index, result }),
+			onDetachedExit: (result) => {
+				updateRememberedForegroundChild(input.state, { runId: input.runId, mode: "parallel", cwd: taskCwd, index, result });
+				notifyForegroundDetachedCompletion({ events: input.intercomEvents, state: input.state, runId: input.runId, mode: "parallel", index, result, orchestratorIntercomTarget: input.orchestratorIntercomTarget });
+			},
 			intercomSessionName: input.childIntercomTarget?.(task.agent, index),
 			orchestratorIntercomTarget: input.orchestratorIntercomTarget,
 			nestedRoute: input.foregroundControl?.nestedRoute,
@@ -2969,7 +3026,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		skills: effectiveSkills,
 		acceptance: params.acceptance,
 		acceptanceContext: { mode: "single" },
-		onDetachedExit: (result) => updateRememberedForegroundChild(deps.state, { runId, mode: "single", cwd: effectiveCwd, index: 0, result }),
+		onDetachedExit: (result) => {
+			updateRememberedForegroundChild(deps.state, { runId, mode: "single", cwd: effectiveCwd, index: 0, result });
+			notifyForegroundDetachedCompletion({ events: deps.pi.events, state: deps.state, runId, mode: "single", index: 0, result, orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined });
+		},
 		timeoutMs: data.timeoutMs,
 		deadlineAt,
 		turnBudget: data.turnBudget,

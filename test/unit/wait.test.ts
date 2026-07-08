@@ -430,4 +430,63 @@ describe("wait tool", () => {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("blocks on a foreground-detached run and resolves when it completes", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-fg-detached-"));
+		try {
+			const state = makeState("sess-1");
+			const runId = "fg-detached-run";
+			state.foregroundRuns = new Map([[runId, {
+				runId,
+				mode: "single" as const,
+				cwd: root,
+				updatedAt: Date.now(),
+				children: [{ agent: "worker", index: 0, status: "detached" as const }],
+			}]]);
+
+			const handlers = new Map<string, Array<(d: unknown) => void>>();
+			const events = {
+				on(channel: string, handler: (d: unknown) => void) {
+					const list = handlers.get(channel) ?? [];
+					list.push(handler);
+					handlers.set(channel, list);
+					return () => {
+						const l = handlers.get(channel) ?? [];
+						handlers.set(channel, l.filter((h) => h !== handler));
+					};
+				},
+				emit(channel: string, data: unknown) {
+					for (const h of handlers.get(channel) ?? []) h(data);
+				},
+			};
+
+			const realSleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
+				const t = setTimeout(resolve, ms);
+				signal?.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+			});
+
+			const startedAt = Date.now();
+			const p = waitForSubagents({ id: runId }, undefined, baseDeps(root, state, {
+				events,
+				pollIntervalMs: 10_000,
+				sleep: realSleep,
+			}));
+
+			setTimeout(() => {
+				const run = state.foregroundRuns!.get(runId)!;
+				run.children[0] = { ...run.children[0]!, status: "completed", exitCode: 0 };
+				run.updatedAt = Date.now();
+				events.emit("subagent:async-complete", { id: runId, sessionId: "sess-1" });
+			}, 15);
+
+			const result = await p;
+			const elapsed = Date.now() - startedAt;
+			assert.equal(result.isError, undefined);
+			assert.doesNotMatch(textOf(result), /nothing to wait for/i);
+			assert.match(textOf(result), /1 complete/i);
+			assert.ok(elapsed < 5_000, `should resolve on foreground completion, took ${elapsed}ms`);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
