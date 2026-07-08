@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { controlNotificationKey, formatControlNoticeMessage } from "../runs/shared/subagent-control.ts";
 import type { ControlEvent, SubagentState } from "../shared/types.ts";
+import { wrapSystemMessage, resolveRunLiveness } from "../shared/system-message-wrap.ts";
 
 export const SUBAGENT_CONTROL_MESSAGE_TYPE = "subagent_control_notice";
 
@@ -37,6 +38,7 @@ export function clearPendingForegroundControlNotices(state: SubagentState, runId
 
 function deliverControlNotice(input: {
 	pi: Pick<ExtensionAPI, "sendMessage">;
+	state: SubagentState;
 	visibleControlNotices: Set<string>;
 	details: SubagentControlMessageDetails;
 }): void {
@@ -45,12 +47,18 @@ function deliverControlNotice(input: {
 	if (input.visibleControlNotices.has(key)) return;
 	input.visibleControlNotices.add(key);
 	const noticeText = input.details.noticeText ?? formatControlNoticeMessage(input.details.event, childIntercomTarget);
+	const runLiveness = resolveRunLiveness(input.state, input.details.event.runId);
+	const wrapped = wrapSystemMessage(noticeText, {
+		source: `subagent control notice (${input.details.event.type})`,
+		runLiveness,
+		sentAt: input.details.event.ts,
+	});
 	input.pi.sendMessage(
 		{
 			customType: SUBAGENT_CONTROL_MESSAGE_TYPE,
-			content: noticeText,
+			content: wrapped,
 			display: true,
-			details: { ...input.details, childIntercomTarget, noticeText },
+			details: { ...input.details, childIntercomTarget, noticeText: wrapped },
 		},
 		{ triggerTurn: input.details.source !== "foreground" },
 	);

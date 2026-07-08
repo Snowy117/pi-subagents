@@ -14,6 +14,7 @@ import {
 } from "../runs/shared/pi-args.ts";
 import { POLL_INTERVAL_MS, TEMP_ROOT_DIR, type SubagentState } from "../shared/types.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
+import { wrapSystemMessage, resolveRunLiveness } from "../shared/system-message-wrap.ts";
 
 const SUPERVISOR_CHANNEL_ROOT = path.join(TEMP_ROOT_DIR, "supervisor-channels");
 const REQUESTS_DIR = "requests";
@@ -484,9 +485,15 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 					// Non-blocking progress updates are already delivered to this session.
 				}
 			}
+			const runLiveness = resolveRunLiveness(state, request.runId);
+			const wrapped = wrapSystemMessage(requestVisibleText(request), {
+				source: `supervisor request (${request.reason})`,
+				runLiveness,
+				sentAt: request.createdAt,
+			});
 			pi.sendMessage({
 				customType: "subagent_supervisor_request",
-				content: requestVisibleText(request),
+				content: wrapped,
 				display: true,
 				details: {
 					id: request.id,

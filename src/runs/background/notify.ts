@@ -17,6 +17,7 @@ import {
 	resolveCompletionBatchConfig,
 } from "./completion-batcher.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, type SubagentState } from "../../shared/types.ts";
+import { wrapSystemMessage } from "../../shared/system-message-wrap.ts";
 
 interface ChainStepResult {
 	agent: string;
@@ -100,13 +101,17 @@ export function formatGroupedCompletion(details: SubagentNotifyDetails[]): strin
 
 function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, details: SubagentNotifyDetails[]): void {
 	if (details.length === 0) return;
-	const content = details.length === 1
+	const rawContent = details.length === 1
 		? formatSingleCompletion(details[0]!)
 		: formatGroupedCompletion(details);
+	const wrapped = wrapSystemMessage(rawContent, {
+		source: "subagent completion notification",
+		runLiveness: "finished",
+	});
 	pi.sendMessage(
 		{
 			customType: "subagent-notify",
-			content,
+			content: wrapped,
 			display: true,
 		},
 		{ triggerTurn: true },
