@@ -46,6 +46,7 @@ import {
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_RESULT_INTERCOM_EVENT,
 	type Details,
+	type ForegroundResumeRun,
 	type SubagentState,
 	type WaitToolConfig,
 } from "../../shared/types.ts";
@@ -199,6 +200,57 @@ function matchesId(run: AsyncRunSummary, id: string): boolean {
 	return run.id === id || run.id.startsWith(id);
 }
 
+function foregroundChildState(status: ForegroundResumeRun["children"][number]["status"]): AsyncRunSummary["state"] {
+	switch (status) {
+		case "detached": return "running";
+		case "failed": return "failed";
+		case "paused": return "paused";
+		default: return "complete";
+	}
+}
+
+function foregroundRunEffectiveState(run: ForegroundResumeRun): AsyncRunSummary["state"] {
+	if (run.children.some((child) => child.status === "detached")) return "running";
+	const childStates = run.children.map((child) => foregroundChildState(child.status));
+	if (childStates.some((state) => state === "failed")) return "failed";
+	if (childStates.some((state) => state === "paused")) return "paused";
+	return "complete";
+}
+
+function foregroundRunToWaitSummary(run: ForegroundResumeRun): AsyncRunSummary {
+	return {
+		id: run.runId,
+		asyncDir: "",
+		state: foregroundRunEffectiveState(run),
+		mode: run.mode,
+		cwd: run.cwd,
+		startedAt: run.updatedAt,
+		lastUpdate: run.updatedAt,
+		steps: [],
+	};
+}
+
+function foregroundRunsForWait(state: SubagentState, params: WaitParams): AsyncRunSummary[] {
+	if (!state.foregroundRuns?.size) return [];
+	let runs = [...state.foregroundRuns.values()];
+	if (params.id) {
+		const id = params.id;
+		runs = runs.filter((run) => run.runId === id || run.runId.startsWith(id));
+	}
+	return runs.map(foregroundRunToWaitSummary);
+}
+
+function mergeUniqueById(runs: AsyncRunSummary[]): AsyncRunSummary[] {
+	const seen = new Set<string>();
+	const merged: AsyncRunSummary[] = [];
+	for (const run of runs) {
+		if (seen.has(run.id)) continue;
+		seen.add(run.id);
+		merged.push(run);
+	}
+	return merged;
+}
+
 /** A running run that has flagged it needs the parent's attention. */
 function needsAttention(run: AsyncRunSummary): boolean {
 	return run.activityState === "needs_attention";
@@ -208,13 +260,15 @@ function needsAttention(run: AsyncRunSummary): boolean {
 function activeRunsForSession(params: WaitParams, deps: WaitDeps): AsyncRunSummary[] {
 	const asyncDirRoot = deps.asyncDirRoot ?? ASYNC_DIR;
 	const resultsDir = deps.resultsDir ?? RESULTS_DIR;
-	const runs = listAsyncRuns(asyncDirRoot, {
+	const asyncRuns = listAsyncRuns(asyncDirRoot, {
 		states: [...ACTIVE_STATES],
 		sessionId: deps.state.currentSessionId ?? undefined,
 		resultsDir,
 		kill: deps.kill,
 		now: deps.now,
 	});
+	const foregroundRuns = foregroundRunsForWait(deps.state, params).filter((run) => ACTIVE_STATES.includes(run.state));
+	const runs = mergeUniqueById([...asyncRuns, ...foregroundRuns]);
 	return params.id ? runs.filter((run) => matchesId(run, params.id!)) : runs;
 }
 
@@ -227,12 +281,13 @@ function attentionRunsForSession(params: WaitParams, deps: WaitDeps, initialIds:
 function allRunsForSession(params: WaitParams, deps: WaitDeps): AsyncRunSummary[] {
 	const asyncDirRoot = deps.asyncDirRoot ?? ASYNC_DIR;
 	const resultsDir = deps.resultsDir ?? RESULTS_DIR;
-	const runs = listAsyncRuns(asyncDirRoot, {
+	const asyncRuns = listAsyncRuns(asyncDirRoot, {
 		sessionId: deps.state.currentSessionId ?? undefined,
 		resultsDir,
 		kill: deps.kill,
 		now: deps.now,
 	});
+	const runs = mergeUniqueById([...asyncRuns, ...foregroundRunsForWait(deps.state, params)]);
 	return params.id ? runs.filter((run) => matchesId(run, params.id!)) : runs;
 }
 

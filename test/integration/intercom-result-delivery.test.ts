@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
-import { ASYNC_DIR, INTERCOM_DETACH_REQUEST_EVENT, RESULTS_DIR, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/shared/types.ts";
+import { ASYNC_DIR, INTERCOM_DETACH_REQUEST_EVENT, RESULTS_DIR, SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/shared/types.ts";
 import type { MockPi } from "../support/helpers.ts";
 import {
 	createMockPi,
@@ -736,6 +736,41 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			makeMinimalCtx(tempDir),
 		);
 		assert.match(transcript.content[0]?.text ?? "", /chain recovered answer/);
+	});
+
+	it("emits a completion notification when a foreground-detached child exits", async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("contact_supervisor", { reason: "need_decision", message: "Need a decision" })] },
+				{ delay: 50, jsonl: [events.assistantMessage("detached completion answer")] },
+			],
+		});
+		const { executor, events: bus } = makeExecutor({ agents: [makeAgent("a", { systemPrompt: "Intercom orchestration channel:" })] });
+		let detachEmitted = false;
+		const original = await executor.execute(
+			"foreground-detached-notify-original",
+			{ agent: "a", task: "ask supervisor" },
+			new AbortController().signal,
+			(update: { details?: { progress?: Array<{ currentTool?: string }> } }) => {
+				if (detachEmitted) return;
+				if (!update.details?.progress?.some((entry) => entry.currentTool === "contact_supervisor")) return;
+				detachEmitted = true;
+				bus.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "single-detached-notify" });
+			},
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(detachEmitted, true);
+		const runId = original.details?.runId;
+		assert.ok(runId, "expected foreground run id");
+
+		const emitted = bus.emitted as Array<{ channel: string; payload: { id?: string } }>;
+		const deadline = Date.now() + 5000;
+		while (Date.now() < deadline && !emitted.some((entry) => entry.channel === SUBAGENT_ASYNC_COMPLETE_EVENT && entry.payload?.id === runId)) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+
+		const completion = emitted.find((entry) => entry.channel === SUBAGENT_ASYNC_COMPLETE_EVENT && entry.payload?.id === runId);
+		assert.ok(completion, "expected a completion notification after the detached foreground child exited");
 	});
 
 	it("status recovers a later detached serial chain child under its original index", async () => {
