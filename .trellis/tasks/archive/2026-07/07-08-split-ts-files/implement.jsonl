@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/typescript/index.md", "reason": "entry: pre-dev checklist + quality gate for any TS edit"}
+{"file": ".trellis/spec/typescript/directory-structure.md", "reason": "domain grouping, file-per-concern, folder ceilings, .ts import convention — drives where splits land"}
+{"file": ".trellis/spec/typescript/module-and-export-guidelines.md", "reason": "named exports, .ts relative imports, import type, export default reserved for 4 entry points — barrel pattern must respect this"}
+{"file": ".trellis/spec/typescript/testing-guidelines.md", "reason": "node:test tiers, flat npm globs, injectable fakes — governs test-split + validation commands"}
+{"file": ".trellis/spec/typescript/quality-guidelines.md", "reason": "general quality bar for split files"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "splitting must preserve DRY; avoid duplicating helpers across submodules"}

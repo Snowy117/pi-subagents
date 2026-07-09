@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/typescript/index.md", "reason": "quality check section + acceptance for verifying splits"}
+{"file": ".trellis/spec/typescript/directory-structure.md", "reason": "verify folder file-count budgets + cohesive-concern rule"}
+{"file": ".trellis/spec/typescript/module-and-export-guidelines.md", "reason": "verify exports unchanged, .ts imports, no stray export default"}
+{"file": ".trellis/spec/typescript/testing-guidelines.md", "reason": "verify test tiers + assertions unchanged after test-split"}
