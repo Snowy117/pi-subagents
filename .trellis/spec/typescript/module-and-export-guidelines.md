@@ -133,6 +133,40 @@ Prefer `create*` + closures + injected dependencies for everything else
 (see [error-and-io-guidelines.md](./error-and-io-guidelines.md) for the
 dependency-injection pattern).
 
+### 4. Barrel re-export hubs for split modules
+
+When a file grows too large and is split into a `<stem>/` subdirectory, the
+original `<stem>.ts` is kept as a **thin re-export barrel** so every existing
+importer keeps resolving unchanged:
+
+```ts
+// src/shared/types.ts becomes a barrel
+export * from "./types/budget-types.ts";
+export * from "./types/control-types.ts";
+export * from "./types/acceptance-types.ts";
+// … one line per cohesive submodule
+```
+
+Rules for barrels:
+- The barrel re-exports **exactly** the set of names the original monolith
+  exported — nothing added, renamed, or dropped. A split is not complete until
+  exported-symbol parity is verified (list before vs after).
+- Prefer `export *` per submodule. When a submodule also exports internal-only
+  helpers that must NOT leak onto the public surface, use **selective named
+  re-exports** for that submodule instead (`export { onlyPublic } from "./x.ts"`).
+  This selective pattern is how e.g. `types.ts` keeps a private type out of the
+  surface while still wildcarding the clean submodules.
+- For a barrel that must preserve an entry point's `export default` (one of the
+  4 extension registrars), combine: `export { default } from "./x/runtime.ts";`
+  plus `export *` for the named exports.
+- Barrels stay tiny (one line per submodule). If a barrel would approach the
+  line budget, the submodule seams are wrong — re-cut them.
+- The submodules are **internal-only**: imported only by their barrel (and
+  optionally sibling `./` paths), never from outside the `<stem>/` tree.
+
+This is the project's established technique for splitting a high-coupling file
+(e.g. `types.ts`, imported by 80+ files) without rewriting any importer.
+
 ---
 
 ## Common Mistakes
@@ -141,3 +175,8 @@ dependency-injection pattern).
 - **Forgetting `node:` prefix** — works today but violates the universal convention.
 - **Using `export default`** for a non-extension module — breaks the import-style uniformity.
 - **Value import where a type import suffices** — always split with `import type`.
+- **Forgetting export parity when splitting a file** — after a split, the barrel
+  must re-export exactly the original names; verify before calling the split done.
+- **Leaking internal helpers via `export *`** — if a submodule exports helpers
+  consumed only by siblings, use selective named re-exports so they don't appear
+  on the public surface.

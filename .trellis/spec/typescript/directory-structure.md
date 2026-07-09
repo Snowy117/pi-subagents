@@ -79,6 +79,35 @@ proves this: instead of one giant `async.ts`, the work is split into
 **When adding async/background behavior, create a new focused file in
 `runs/background/` rather than appending to an existing large file.**
 
+#### Hard line budget (300 / 500)
+
+- **Every `src/**/*.ts` file must stay ≤ 300 lines.**
+- **Every `test/**/*.ts` file must stay ≤ 500 lines.**
+
+When a file approaches or exceeds its budget, split it along a cohesive
+seam into a `<stem>/` subdirectory and keep `<stem>.ts` as a re-export
+barrel (see [module-and-export-guidelines.md](./module-and-export-guidelines.md) §4).
+Do **not** pile flat sibling files into a directory that is already at its
+file-count ceiling (`runs/background/` = 20, `runs/shared/` = 23): use a
+`<stem>/` subdir in that case.
+
+#### Splitting a closure-heavy giant: shared-state-object extraction
+
+Some files are dominated by ONE large async function with many inline
+closures sharing mutable state (e.g. `runSubagent`, `runSingleAttempt`).
+The approved technique is **shared-state-object + closure-group extraction**:
+
+1. Collect the mutable locals into a `*State` interface + a `create*State()`
+   factory (e.g. `RunnerState`, `SingleAttemptState`).
+2. Extract cohesive closure groups into sibling modules (`runner-step-control.ts`,
+   `single-attempt-events.ts`, …) as functions taking `(state, …params)`.
+3. The extracted functions mutate the SAME state object by reference.
+
+**Critical R2 rule for concurrent/spawn code:** do NOT add or remove `await`,
+do NOT change handler-registration order or event-processing order, and do
+NOT change mutation order. Inline `let x` captured by reference becomes
+`state.x` access so by-reference visibility is preserved byte-for-byte.
+
 ### 4. Extension entry points use `export default`
 
 Only **4** files in the entire codebase use `export default`, and they are
