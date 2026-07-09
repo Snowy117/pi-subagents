@@ -1,0 +1,209 @@
+import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { keyText, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
+import type { SubagentParamsLike } from "../../runs/foreground/subagent-executor.ts";
+import type { SlashSubagentResponse, SlashSubagentUpdate } from "../slash-bridge.ts";
+import {
+	applySlashUpdate,
+	buildSlashInitialResult,
+	failSlashResult,
+	finalizeSlashResult,
+} from "../slash-live-state.ts";
+import {
+	SLASH_RESULT_TYPE,
+	type SingleResult,
+} from "../../shared/types.ts";
+import {
+	SLASH_SUBAGENT_CANCEL_EVENT,
+	SLASH_SUBAGENT_REQUEST_EVENT,
+	SLASH_SUBAGENT_RESPONSE_EVENT,
+	SLASH_SUBAGENT_STARTED_EVENT,
+	SLASH_SUBAGENT_UPDATE_EVENT,
+} from "../../shared/types.ts";
+
+async function requestSlashRun(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	requestId: string,
+	params: SubagentParamsLike,
+): Promise<SlashSubagentResponse> {
+	return new Promise((resolve, reject) => {
+		let done = false;
+		let started = false;
+
+		const startTimeoutMs = 15_000;
+		const startTimeout = setTimeout(() => {
+			finish(() => reject(new Error(
+				"Slash subagent bridge did not start within 15s. Ensure the extension is loaded correctly.",
+			)));
+		}, startTimeoutMs);
+
+		const onStarted = (data: unknown) => {
+			if (done || !data || typeof data !== "object") return;
+			if ((data as { requestId?: unknown }).requestId !== requestId) return;
+			started = true;
+			clearTimeout(startTimeout);
+			if (ctx.hasUI) ctx.ui.setStatus("subagent-slash", "running...");
+		};
+
+		const onResponse = (data: unknown) => {
+			if (done || !data || typeof data !== "object") return;
+			const response = data as Partial<SlashSubagentResponse>;
+			if (response.requestId !== requestId) return;
+			clearTimeout(startTimeout);
+			finish(() => resolve(response as SlashSubagentResponse));
+		};
+
+		const onUpdate = (data: unknown) => {
+			if (done || !data || typeof data !== "object") return;
+			const update = data as SlashSubagentUpdate;
+			if (update.requestId !== requestId) return;
+			applySlashUpdate(requestId, update);
+			if (!ctx.hasUI) return;
+			const tool = update.currentTool ? ` ${update.currentTool}` : "";
+			const count = update.toolCount ?? 0;
+			const liveDetailKey = keyText("app.tools.expand");
+			ctx.ui.setStatus("subagent-slash", `${count} tools${tool} | ${liveDetailKey} live detail`);
+		};
+
+		const onTerminalInput = ctx.hasUI
+			? ctx.ui.onTerminalInput((input) => {
+				if (!matchesKey(input, Key.escape)) return undefined;
+				pi.events.emit(SLASH_SUBAGENT_CANCEL_EVENT, { requestId });
+				finish(() => reject(new Error("Cancelled")));
+				return { consume: true };
+			})
+			: undefined;
+
+		const unsubStarted = pi.events.on(SLASH_SUBAGENT_STARTED_EVENT, onStarted);
+		const unsubResponse = pi.events.on(SLASH_SUBAGENT_RESPONSE_EVENT, onResponse);
+		const unsubUpdate = pi.events.on(SLASH_SUBAGENT_UPDATE_EVENT, onUpdate);
+
+		const finish = (next: () => void) => {
+			if (done) return;
+			done = true;
+			clearTimeout(startTimeout);
+			unsubStarted();
+			unsubResponse();
+			unsubUpdate();
+			onTerminalInput?.();
+			next();
+		};
+
+		pi.events.emit(SLASH_SUBAGENT_REQUEST_EVENT, { requestId, params, ctx });
+
+		// Bridge emits STARTED synchronously during REQUEST emit.
+		// If not started, no bridge received the request.
+		if (!started && done) return;
+		if (!started) {
+			finish(() => reject(new Error(
+				"No slash subagent bridge responded. Ensure the subagent extension is loaded correctly.",
+			)));
+		}
+	});
+}
+
+function extractSlashMessageText(content: string | Array<{ type?: string; text?: string }>): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((part): part is { type: "text"; text: string } => part?.type === "text" && typeof part.text === "string")
+		.map((part) => part.text)
+		.join("\n");
+}
+
+function formatExportPathList(paths: string[]): string {
+	return paths.map((file) => `- \`${file}\``).join("\n");
+}
+
+function collectResultPaths(results: SingleResult[], getPath: (result: SingleResult) => string | undefined): string[] {
+	return results
+		.map(getPath)
+		.filter((file): file is string => typeof file === "string" && file.length > 0);
+}
+
+function buildSlashExportText(response: SlashSubagentResponse): string {
+	const output = extractSlashMessageText(response.result.content) || response.errorText || "(no output)";
+	const results = response.result.details?.results ?? [];
+	const sessionFiles = collectResultPaths(results, (result) => result.sessionFile);
+	const savedOutputs = collectResultPaths(results, (result) => result.savedOutputPath);
+	const artifactOutputs = collectResultPaths(results, (result) => result.artifactPaths?.outputPath);
+	const sections = ["## Subagent result", output];
+	if (sessionFiles.length > 0) sections.push("## Child session exports", formatExportPathList(sessionFiles));
+	if (savedOutputs.length > 0) sections.push("## Saved outputs", formatExportPathList(savedOutputs));
+	if (artifactOutputs.length > 0) sections.push("## Artifact outputs", formatExportPathList(artifactOutputs));
+	return sections.join("\n\n");
+}
+
+function persistSlashSessionSnapshot(ctx: ExtensionContext): void {
+	try {
+		if (!ctx.sessionManager) return;
+		const sessionManager = ctx.sessionManager as typeof ctx.sessionManager & {
+			_rewriteFile?: () => void;
+			flushed?: boolean;
+		};
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile || typeof sessionManager._rewriteFile !== "function") return;
+		fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+		sessionManager._rewriteFile();
+		sessionManager.flushed = true;
+	} catch (error) {
+		console.error("Failed to persist slash session snapshot for export:", error);
+	}
+}
+
+export async function runSlashSubagent(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	params: SubagentParamsLike,
+): Promise<void> {
+	if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
+	const requestId = randomUUID();
+	const initialDetails = buildSlashInitialResult(requestId, params);
+	const initialText = extractSlashMessageText(initialDetails.result.content) || "Running subagent...";
+	pi.sendMessage({
+		customType: SLASH_RESULT_TYPE,
+		content: initialText,
+		display: true,
+		details: initialDetails,
+	});
+	persistSlashSessionSnapshot(ctx);
+
+	try {
+		const response = await requestSlashRun(pi, ctx, requestId, params);
+		const finalDetails = finalizeSlashResult(response);
+		pi.sendMessage({
+			customType: SLASH_RESULT_TYPE,
+			content: buildSlashExportText(response),
+			display: !ctx.hasUI,
+			details: finalDetails,
+		});
+		persistSlashSessionSnapshot(ctx);
+		if (ctx.hasUI) {
+			ctx.ui.setStatus("subagent-slash", undefined);
+		}
+		if (response.isError && ctx.hasUI) {
+			ctx.ui.notify(response.errorText || "Subagent failed", "error");
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		const failedDetails = failSlashResult(requestId, params, message);
+		pi.sendMessage({
+			customType: SLASH_RESULT_TYPE,
+			content: `## Subagent result\n\n${message}`,
+			display: !ctx.hasUI,
+			details: failedDetails,
+		});
+		persistSlashSessionSnapshot(ctx);
+		if (ctx.hasUI) {
+			ctx.ui.setStatus("subagent-slash", undefined);
+		}
+		if (message === "Cancelled") {
+			if (ctx.hasUI) ctx.ui.notify("Cancelled", "warning");
+			return;
+		}
+		if (ctx.hasUI) ctx.ui.notify(message, "error");
+	}
+}
