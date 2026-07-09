@@ -1,7 +1,7 @@
 /** single-path (split from subagent-executor.ts; internal-only). */
 
 import { discoverAvailableSkills, normalizeSkillInput } from "../../../agents/skills.ts";
-import { INTERCOM_BRIDGE_MARKER, resolveSubagentIntercomTarget } from "../../../intercom/intercom-bridge.ts";
+import { resolveSubagentIntercomTarget } from "../../../intercom/intercom-bridge.ts";
 import { type ModelInfo, toModelInfo } from "../../../shared/model-info.ts";
 import { resolveStepBehavior } from "../../../shared/settings.ts";
 import { type AgentProgress, type ArtifactPaths, type Details, resolveChildMaxSubagentDepth, resolveCurrentMaxSubagentDepth, wrapForkTask } from "../../../shared/types.ts";
@@ -16,11 +16,11 @@ import { runSync } from ".././execution.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
 import { randomUUID } from "node:crypto";
 import { resolveEffectiveToolBudget, shouldForkAgent } from "./budget-resolution.ts";
-import { notifyForegroundDetachedCompletion } from "./foreground-notify.ts";
-import { rememberForegroundRun, updateRememberedForegroundChild } from "./foreground-state.ts";
+import { rememberForegroundRun } from "./foreground-state.ts";
 import { toExecutionErrorResult } from "./fork-helpers.ts";
 import { createForegroundControlNotifier, formatFailedSingleRunOutput, maybeBuildForegroundIntercomReceipt } from "./intercom-result.ts";
 import { resolveSingleRunOutputBaseDir } from "./parallel-helpers.ts";
+import { buildSingleRunSyncOptions, createSingleUpdateForwarder, syncSingleForegroundControlAfterRun } from "./single-path-helpers.ts";
 import { type ExecutionContextData, type ExecutorDeps } from "./types.ts";
 
 
@@ -30,9 +30,7 @@ export async function runSinglePath(data: ExecutionContextData, deps: ExecutorDe
 		effectiveCwd,
 		agents,
 		ctx,
-		signal,
 		runId,
-		sessionDirForIndex,
 		sessionFileForTask,
 		thinkingOverrideForTask,
 		shareEnabled,
@@ -191,80 +189,15 @@ export async function runSinglePath(data: ExecutionContextData, deps: ExecutorDe
 		};
 	}
 
-	const forwardSingleUpdate = onUpdate
-		? (update: AgentToolResult<Details>) => {
-			if (foregroundControl) {
-				const firstProgress = update.details?.progress?.[0];
-				foregroundControl.currentAgent = params.agent;
-				foregroundControl.currentIndex = firstProgress?.index ?? 0;
-				foregroundControl.currentActivityState = firstProgress?.activityState;
-				foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
-				foregroundControl.currentTool = firstProgress?.currentTool;
-				foregroundControl.currentToolStartedAt = firstProgress?.currentToolStartedAt;
-				foregroundControl.currentPath = firstProgress?.currentPath;
-				foregroundControl.turnCount = firstProgress?.turnCount;
-				foregroundControl.tokens = firstProgress?.tokens;
-				foregroundControl.toolCount = firstProgress?.toolCount;
-				foregroundControl.updatedAt = Date.now();
-			}
-			onUpdate(update);
-		}
-		: undefined;
+	const forwardSingleUpdate = onUpdate ? createSingleUpdateForwarder(foregroundControl, params.agent!, onUpdate) : undefined;
 
 	const deadlineAt = data.deadlineAt ?? (data.timeoutMs !== undefined ? Date.now() + data.timeoutMs : undefined);
-	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
-		parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
-		cwd: effectiveCwd,
-		signal,
-		interruptSignal: interruptController.signal,
-		allowIntercomDetach: agentConfig.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
-		intercomEvents: deps.pi.events,
-		runId,
-		sessionDir: sessionDirForIndex(0),
-		sessionFile: sessionFileForTask(params.agent!, 0),
-		share: shareEnabled,
-		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-		artifactConfig,
-		maxOutput: params.maxOutput,
-		outputPath,
-		outputMode: effectiveOutputMode,
-		maxSubagentDepth,
-		onUpdate: forwardSingleUpdate,
-		controlConfig,
-		onControlEvent,
-		intercomSessionName: childIntercomTarget,
-		orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
-		nestedRoute: foregroundControl?.nestedRoute,
-		index: 0,
-		modelOverride,
-		thinkingOverride: thinkingOverrideForTask(params.agent!, 0),
-		availableModels,
-		preferredModelProvider: currentProvider,
-		modelScope: data.modelScope,
-		skills: effectiveSkills,
-		acceptance: params.acceptance,
-		acceptanceContext: { mode: "single" },
-		onDetachedExit: (result) => {
-			updateRememberedForegroundChild(deps.state, { runId, mode: "single", cwd: effectiveCwd, index: 0, result });
-			notifyForegroundDetachedCompletion({ events: deps.pi.events, state: deps.state, runId, mode: "single", index: 0, result, orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined });
-		},
-		timeoutMs: data.timeoutMs,
-		deadlineAt,
-		turnBudget: data.turnBudget,
-		toolBudget: effectiveToolBudget.toolBudget,
-	});
-	if (foregroundControl?.currentIndex === 0) {
-		foregroundControl.interrupt = undefined;
-		foregroundControl.currentActivityState = r.progress?.activityState;
-		foregroundControl.lastActivityAt = r.progress?.lastActivityAt;
-		foregroundControl.currentTool = r.progress?.currentTool;
-		foregroundControl.currentToolStartedAt = r.progress?.currentToolStartedAt;
-		foregroundControl.currentPath = r.progress?.currentPath;
-		foregroundControl.turnCount = r.progress?.turnCount;
-		foregroundControl.tokens = r.progress?.tokens;
-		foregroundControl.toolCount = r.progress?.toolCount;
-		foregroundControl.updatedAt = Date.now();
-	}
+	const r = await runSync(ctx.cwd, agents, params.agent!, task, buildSingleRunSyncOptions(data, deps, {
+		interruptController, agentConfig, outputPath, effectiveOutputMode, maxSubagentDepth,
+		forwardSingleUpdate, onControlEvent, childIntercomTarget, foregroundControl,
+		modelOverride, availableModels, currentProvider, effectiveSkills, deadlineAt, effectiveToolBudget,
+	}));
+	if (foregroundControl?.currentIndex === 0) syncSingleForegroundControlAfterRun(foregroundControl, r.progress);
 	recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0);
 
 	if (r.progress) allProgress.push(r.progress);

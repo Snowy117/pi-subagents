@@ -4,23 +4,21 @@ import { type AgentConfig } from "../../../agents/agents.ts";
 import { discoverAvailableSkills, normalizeSkillInput } from "../../../agents/skills.ts";
 import { resolveSubagentIntercomTarget } from "../../../intercom/intercom-bridge.ts";
 import { type ModelInfo, toModelInfo } from "../../../shared/model-info.ts";
-import { type StepOverrides, resolveStepBehavior, suppressProgressForReadOnlyTask, taskDisallowsFileUpdates, writeInitialProgressFile } from "../../../shared/settings.ts";
+import { type StepOverrides, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile } from "../../../shared/settings.ts";
 import { type AgentProgress, type ArtifactPaths, type Details, type ResolvedToolBudget, type SingleResult, resolveChildMaxSubagentDepth, resolveCurrentMaxSubagentDepth, resolveTopLevelParallelConcurrency, resolveTopLevelParallelMaxTasks, wrapForkTask } from "../../../shared/types.ts";
-import { compactForegroundDetails, getSingleResultOutput, sumResultsCost, sumResultsUsage } from "../../../shared/utils.ts";
-import { executeAsyncChain, isAsyncAvailable } from "../../background/async-execution.ts";
+import { compactForegroundDetails, sumResultsCost, sumResultsUsage } from "../../../shared/utils.ts";
 import { resolveSubagentModelOverride } from "../../shared/model-fallback.ts";
 import { attachRootChildrenToSteps, updateForegroundNestedProjection } from "../../shared/nested-events.ts";
-import { DEFAULT_GLOBAL_CONCURRENCY_LIMIT, Semaphore, aggregateParallelOutputs } from "../../shared/parallel-utils.ts";
 import { recordRun } from "../../shared/run-history.ts";
 import { resolveSingleOutputPath, validateFileOnlyOutputMode } from "../../shared/single-output.ts";
 import { cleanupWorktrees } from "../../shared/worktree.ts";
 import { type ChainClarifyResult, ChainClarifyComponent } from ".././chain-clarify.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
-import { randomUUID } from "node:crypto";
 import { resolveEffectiveToolBudget, shouldForkAgent } from "./budget-resolution.ts";
 import { rememberForegroundRun } from "./foreground-state.ts";
 import { createForegroundControlNotifier, maybeBuildForegroundIntercomReceipt } from "./intercom-result.ts";
-import { buildParallelModeError, buildParallelWorktreeSuffix, buildParallelWorktreeTaskCwdError, createParallelWorktreeSetup, findDuplicateParallelOutputPath, resolveParallelTaskCwd } from "./parallel-helpers.ts";
+import { buildParallelModeError, buildParallelWorktreeTaskCwdError, createParallelWorktreeSetup, findDuplicateParallelOutputPath, resolveParallelTaskCwd } from "./parallel-helpers.ts";
+import { buildForegroundParallelRunInput, buildParallelSuccessResult, dispatchParallelBackgroundFromClarify } from "./parallel-path-helpers.ts";
 import { runForegroundParallelTasks } from "./parallel-tasks.ts";
 import { type ExecutionContextData, type ExecutorDeps } from "./types.ts";
 import * as path from "node:path";
@@ -32,19 +30,9 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 		effectiveCwd,
 		agents,
 		ctx,
-		signal,
 		runId,
-		sessionDirForIndex,
-		sessionFileForIndex,
-		sessionFileForTask,
-		thinkingOverrideForTask,
-		shareEnabled,
-		artifactConfig,
 		artifactsDir,
 		backgroundRequestedWhileClarifying,
-		onUpdate,
-		sessionRoot,
-		controlConfig,
 		contextPolicy,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
@@ -154,65 +142,9 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 		}
 
 		if (result.runInBackground) {
-			if (!isAsyncAvailable()) {
-				return {
-					content: [{ type: "text", text: "Background mode requires upstream jiti for TypeScript execution but it could not be found. Ensure the pi-subagents package dependencies are installed." }],
-					isError: true,
-					details: { mode: "parallel" as const, results: [] },
-				};
-			}
-			const id = randomUUID();
-			const asyncCtx = {
-				pi: deps.pi,
-				cwd: ctx.cwd,
-				currentSessionId: deps.state.currentSessionId!,
-				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
-				currentModelProvider: ctx.model?.provider,
-				currentModel: ctx.model,
-				modelScope: data.modelScope,
-			};
-			const parallelTasks = tasks.map((t, i) => {
-				const taskText = shouldForkAgent(contextPolicy, t.agent) ? wrapForkTask(taskTexts[i]!) : taskTexts[i]!;
-				const progress = taskDisallowsFileUpdates(taskText) ? false : behaviorOverrides[i]?.progress;
-				return {
-					agent: t.agent,
-					task: taskText,
-					cwd: t.cwd,
-					...(modelOverrides[i] ? { model: modelOverrides[i] } : {}),
-					...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
-					...(behaviorOverrides[i]?.output !== undefined ? { output: behaviorOverrides[i]!.output } : {}),
-					...(behaviorOverrides[i]?.outputMode !== undefined ? { outputMode: behaviorOverrides[i]!.outputMode } : {}),
-					...(behaviorOverrides[i]?.reads !== undefined ? { reads: behaviorOverrides[i]!.reads } : {}),
-					...(progress !== undefined ? { progress } : {}),
-					...(t.toolBudget !== undefined ? { toolBudget: t.toolBudget } : {}),
-					...(t.acceptance !== undefined ? { acceptance: t.acceptance } : {}),
-				};
-			});
-			return executeAsyncChain(id, {
-				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
-				resultMode: "parallel",
-				agents,
-				ctx: asyncCtx,
-				availableModels,
-				cwd: effectiveCwd,
-				maxOutput: params.maxOutput,
-				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-				artifactConfig,
-				shareEnabled,
-				sessionRoot,
-				chainSkills: [],
-				sessionFilesByFlatIndex: tasks.map((task, index) => sessionFileForTask(task.agent, index)),
-				thinkingOverridesByFlatIndex: tasks.map((task, index) => thinkingOverrideForTask(task.agent, index)),
-				maxSubagentDepth: currentMaxSubagentDepth,
-				worktreeSetupHook: deps.config.worktreeSetupHook,
-				worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
-				worktreeBaseDir: deps.config.worktreeBaseDir,
-				controlConfig,
-				controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
-				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
-				timeoutMs: data.timeoutMs,
-				turnBudget: data.turnBudget,
-				globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
+			return dispatchParallelBackgroundFromClarify(data, deps, {
+				taskTexts, behaviorOverrides, modelOverrides, skillOverrides,
+				availableModels, parallelConcurrency, currentMaxSubagentDepth,
 			});
 		}
 	}
@@ -260,48 +192,12 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 		}
 
 		const deadlineAt = data.deadlineAt ?? (data.timeoutMs !== undefined ? Date.now() + data.timeoutMs : undefined);
-		const results = await runForegroundParallelTasks({
-			tasks,
-			taskTexts,
-			agents,
-			ctx,
-			state: deps.state,
-			intercomEvents: deps.pi.events,
-			signal,
-			runId,
-			sessionDirForIndex,
-			sessionFileForIndex,
-			sessionFileForTask,
-			thinkingOverrideForTask,
-			shareEnabled,
-			artifactConfig,
-			artifactsDir,
-			outputBaseDir,
-			maxOutput: params.maxOutput,
-			paramsCwd: effectiveCwd,
-			progressDir: parallelProgressDir,
-			availableModels,
-			modelScope: data.modelScope,
-			modelOverrides,
-			behaviors,
-			firstProgressIndex: parallelProgressPrecreated ? -1 : firstProgressIndex,
-			controlConfig,
-			onControlEvent,
-			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(runId, agent, index) : undefined,
-			orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
-			foregroundControl,
-			concurrencyLimit: parallelConcurrency,
-			globalSemaphore: new Semaphore(deps.config.globalConcurrencyLimit ?? DEFAULT_GLOBAL_CONCURRENCY_LIMIT),
-			maxSubagentDepths,
-			liveResults,
-			liveProgress,
-			onUpdate,
-			worktreeSetup,
-			timeoutMs: data.timeoutMs,
-			deadlineAt,
-			turnBudget: data.turnBudget,
-			toolBudgets,
-		});
+		const results = await runForegroundParallelTasks(buildForegroundParallelRunInput(data, deps, {
+			taskTexts, modelOverrides, behaviors, maxSubagentDepths, availableModels,
+			onControlEvent, childIntercomTarget, foregroundControl, parallelConcurrency,
+			liveResults, liveProgress, worktreeSetup, deadlineAt, parallelProgressDir,
+			outputBaseDir, toolBudgets, parallelProgressPrecreated, firstProgressIndex,
+		}));
 		for (let i = 0; i < results.length; i++) {
 			const run = results[i]!;
 			recordRun(run.agent, taskTexts[i]!, run.exitCode, run.progressSummary?.durationMs ?? 0);
@@ -358,29 +254,9 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 			};
 		}
 
-		const worktreeSuffix = buildParallelWorktreeSuffix(worktreeSetup, artifactsDir, tasks);
-		const ok = results.filter((result) => result.exitCode === 0).length;
-		const downgradeNote = backgroundRequestedWhileClarifying ? " (background requested, but clarify kept this run foreground)" : "";
-		const aggregatedOutput = aggregateParallelOutputs(
-			results.map((result) => ({
-				agent: result.agent,
-				output: result.truncation?.text || getSingleResultOutput(result),
-				exitCode: result.exitCode,
-				error: result.error,
-				timedOut: result.timedOut,
-			})),
-			(i, agent) => `=== Task ${i + 1}: ${agent} ===`,
-		);
-
-		const summary = `${ok}/${results.length} succeeded${downgradeNote}`;
-		const fullContent = worktreeSuffix
-			? `${summary}\n\n${aggregatedOutput}\n\n${worktreeSuffix}`
-			: `${summary}\n\n${aggregatedOutput}`;
-
-		return {
-			content: [{ type: "text", text: fullContent }],
-			details,
-		};
+		return buildParallelSuccessResult(results, details, {
+			worktreeSetup, artifactsDir, tasks, backgroundRequestedWhileClarifying,
+		});
 	} finally {
 		if (worktreeSetup) cleanupWorktrees(worktreeSetup);
 	}

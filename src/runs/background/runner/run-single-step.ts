@@ -1,25 +1,24 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { deliverTimeoutRequest } from "../control-channel.ts";
-import { waitForImportedAsyncRoot } from "../chain-root-attachment.ts";
-import { detectSubagentError, extractTextFromContent, readStatus } from "../../../shared/utils.ts";
+import { detectSubagentError, extractTextFromContent } from "../../../shared/utils.ts";
 import { resolveOutputReferences } from "../../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime, readStructuredOutput } from "../../shared/structured-output.ts";
 import { getArtifactPaths } from "../../../shared/artifacts.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../../shared/child-transcript.ts";
 import { acceptanceFailureMessage, evaluateAcceptance, formatAcceptancePrompt, stripAcceptanceReport } from "../../shared/acceptance.ts";
-import { buildPiArgs, cleanupTempDir } from "../../shared/pi-args.ts";
+import { cleanupTempDir } from "../../shared/pi-args.ts";
 import { resolveEffectiveThinking } from "../../../shared/model-info.ts";
 import { runPiStreaming } from "./run-pi-streaming.ts";
 import { captureSingleOutputSnapshot, finalizeSingleOutput, formatSavedOutputReference, resolveSingleOutput, type SingleOutputSnapshot } from "../../shared/single-output.ts";
-import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, shouldAbortForTurnBudget, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../../shared/turn-budget.ts";
+import { formatTurnBudgetOutput, initialTurnBudgetState, shouldAbortForTurnBudget, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../../shared/turn-budget.ts";
 import { initialToolBudgetState, toolBudgetState } from "../../shared/tool-budget.ts";
 import { evaluateCompletionMutationGuard } from "../../shared/completion-guard.ts";
 import { formatModelAttemptNote, isRetryableModelFailure } from "../../shared/model-fallback.ts";
-import { costSummaryFromAttempts, isTerminalAssistantStop } from "./usage-helpers.ts";
+import { isTerminalAssistantStop } from "./usage-helpers.ts";
 import type { ArtifactPaths, ModelAttempt, ToolBudgetState, TurnBudgetState } from "../../../shared/types.ts";
 import type { RunPiStreamingResult, SingleStepContext } from "./types.ts";
 import type { RunnerSubagentStep as SubagentStep } from "../../shared/parallel-utils.ts";
+import { buildSingleStepResult, buildStepPiArgs, runImportedAsyncRootStep, writeStepArtifactFiles } from "./run-single-step-helpers.ts";
 
 /** Run a single pi agent step, returning output and metadata */
 export async function runSingleStep(
@@ -51,54 +50,8 @@ export async function runSingleStep(
 	structuredOutputSchemaPath?: string;
 	acceptance?: import("../../../shared/types.ts").AcceptanceLedger;
 }> {
-	if (step.importAsyncRoot) {
-		let importTimedOut = false;
-		ctx.registerTimeout?.(() => {
-			importTimedOut = true;
-			let pid: number | undefined;
-			try {
-				pid = readStatus(step.importAsyncRoot!.asyncDir)?.pid;
-			} catch {
-				pid = undefined;
-			}
-			try {
-				deliverTimeoutRequest({ asyncDir: step.importAsyncRoot!.asyncDir, pid, source: "ancestor-timeout" });
-			} catch {
-				// The parent runner's own timeout result is authoritative for the attached step.
-			}
-		});
-		try {
-			const imported = await waitForImportedAsyncRoot(step.importAsyncRoot, {
-				shouldAbort: () => importTimedOut || ctx.timeoutSignal?.aborted === true || ctx.skipAcceptance?.() === true,
-				timeoutMessage: ctx.timeoutMessage,
-			});
-			try {
-				fs.writeFileSync(ctx.outputFile, imported.output, "utf-8");
-			} catch {
-				// Output files are observability only for imported roots.
-			}
-			const timedOut = importTimedOut || imported.timedOut === true || ctx.timeoutSignal?.aborted === true || ctx.skipAcceptance?.() === true;
-			return {
-				agent: imported.agent,
-				output: timedOut ? ctx.timeoutMessage ?? "Subagent timed out." : imported.output,
-				exitCode: timedOut ? 1 : imported.exitCode,
-				error: timedOut ? ctx.timeoutMessage ?? "Subagent timed out." : imported.error,
-				timedOut: timedOut ? true : undefined,
-				sessionFile: imported.sessionFile,
-				intercomTarget: imported.intercomTarget,
-				model: imported.model,
-				attemptedModels: imported.attemptedModels,
-				modelAttempts: imported.modelAttempts,
-				totalCost: imported.totalCost,
-				structuredOutput: timedOut ? undefined : imported.structuredOutput,
-				structuredOutputPath: timedOut ? undefined : imported.structuredOutputPath,
-				structuredOutputSchemaPath: timedOut ? undefined : imported.structuredOutputSchemaPath,
-				acceptance: timedOut ? undefined : imported.acceptance,
-			};
-		} finally {
-			ctx.registerTimeout?.(undefined);
-		}
-	}
+	const importedResult = await runImportedAsyncRootStep(step, ctx);
+	if (importedResult) return importedResult;
 
 	const effectiveStructuredOutput = step.structuredOutput ?? (step.structuredOutputSchema
 		? createStructuredOutputRuntime(step.structuredOutputSchema, path.join(path.dirname(ctx.outputFile), "structured-output"))
@@ -164,38 +117,7 @@ export async function runSingleStep(
 				// Missing/stale structured-output files are handled after the child exits.
 			}
 		}
-		const { args, env, tempDir } = buildPiArgs({
-			parentSessionId: step.parentSessionId,
-			baseArgs: ["--mode", "json", "-p"],
-			task,
-			sessionEnabled,
-			sessionDir,
-			sessionFile: step.sessionFile,
-			model: candidate,
-			inheritProjectContext: step.inheritProjectContext,
-			inheritSkills: step.inheritSkills,
-			requireReadTool: Boolean(step.skills?.length),
-			tools: step.tools,
-			extensions: step.extensions,
-			subagentOnlyExtensions: step.subagentOnlyExtensions,
-			systemPrompt: appendTurnBudgetSystemPrompt(step.systemPrompt ?? "", ctx.turnBudget),
-			systemPromptMode: step.systemPromptMode,
-			mcpDirectTools: step.mcpDirectTools,
-			cwd: step.cwd ?? ctx.cwd,
-			promptFileStem: step.agent,
-			intercomSessionName: ctx.childIntercomTarget,
-			orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
-			runId: ctx.id,
-			childAgentName: step.agent,
-			childIndex: ctx.flatIndex,
-			parentEventSink: ctx.nestedRoute?.eventSink,
-			parentControlInbox: ctx.nestedRoute?.controlInbox,
-			parentRootRunId: ctx.nestedRoute?.rootRunId,
-			parentCapabilityToken: ctx.nestedRoute?.capabilityToken,
-			steerInboxDir: ctx.steerInboxDir,
-			structuredOutput: effectiveStructuredOutput,
-			toolBudget: step.toolBudget,
-		});
+		const { args, env, tempDir } = buildStepPiArgs(step, ctx, { candidate, effectiveStructuredOutput, sessionEnabled, sessionDir, task });
 		const run = await runPiStreaming(
 			args,
 			step.cwd ?? ctx.cwd,
@@ -354,58 +276,18 @@ export async function runSingleStep(
 				? (finalResult?.error ? `${finalResult.error}\n${acceptanceFailure}` : acceptanceFailure)
 				: finalResult?.error;
 
-	if (artifactPaths && ctx.artifactConfig?.enabled !== false) {
-		if (ctx.artifactConfig?.includeOutput !== false) {
-			fs.writeFileSync(artifactPaths.outputPath, output, "utf-8");
-		}
-		if (ctx.artifactConfig?.includeMetadata !== false) {
-			fs.writeFileSync(
-				artifactPaths.metadataPath,
-				JSON.stringify({
-					runId: ctx.id,
-					agent: step.agent,
-					task,
-					exitCode: effectiveFinalExitCode,
-					model: finalResult?.model,
-					attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
-					modelAttempts,
-					...(transcriptWriter ? { transcriptPath: artifactPaths.transcriptPath } : {}),
-					transcriptError: transcriptWriter?.getError(),
-					skills: step.skills,
-					timestamp: Date.now(),
-				}, null, 2),
-				"utf-8",
-			);
-		}
-	}
+	if (artifactPaths) writeStepArtifactFiles({
+		artifactPaths, ctx, step, output, effectiveFinalExitCode,
+		finalResult, attemptedModels, modelAttempts, transcriptWriter, task,
+	});
 
-	return {
-		agent: step.agent,
-		output: outputForSummary,
-		exitCode: effectiveFinalExitCode,
-		error: effectiveFinalError,
-		sessionFile: step.sessionFile,
-		intercomTarget: ctx.childIntercomTarget,
-		model: finalResult?.model,
-		attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
-		modelAttempts,
-		totalCost: costSummaryFromAttempts(modelAttempts),
-		artifactPaths,
-		transcriptPath: transcriptWriter ? artifactPaths?.transcriptPath : undefined,
-		transcriptError: transcriptWriter?.getError(),
-		interrupted: timedOutAfterAcceptance || turnBudgetExceeded ? false : finalResult?.interrupted,
-		timedOut: timedOutAfterAcceptance ? true : finalResult?.timedOut,
-		turnBudget,
-		turnBudgetExceeded: turnBudgetExceeded || undefined,
-		wrapUpRequested: finalResult?.wrapUpRequested || turnBudget?.outcome === "wrap-up-requested" || turnBudgetExceeded || undefined,
-		toolBudget,
-		toolBudgetBlocked: toolBudgetBlocked || undefined,
-		completionGuardTriggered: completionGuardTriggeredFinal,
-		structuredOutput: timedOutAfterAcceptance || turnBudgetExceeded ? undefined : (finalResult as (RunPiStreamingResult & { structuredOutput?: unknown }) | undefined)?.structuredOutput,
-		structuredOutputPath: timedOutAfterAcceptance || turnBudgetExceeded ? undefined : effectiveStructuredOutput?.outputPath,
-		structuredOutputSchemaPath: timedOutAfterAcceptance || turnBudgetExceeded ? undefined : effectiveStructuredOutput?.schemaPath,
-		acceptance: effectiveAcceptance,
-	};
+	return buildSingleStepResult({
+		step, ctx, outputForSummary, effectiveFinalExitCode, effectiveFinalError,
+		attemptedModels, modelAttempts, artifactPaths, transcriptWriter,
+		timedOutAfterAcceptance, turnBudgetExceeded, finalResult, turnBudget,
+		toolBudget, toolBudgetBlocked, completionGuardTriggeredFinal,
+		effectiveStructuredOutput, effectiveAcceptance,
+	});
 }
 
 
