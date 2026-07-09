@@ -1,22 +1,34 @@
 /**
  * Chain Clarification TUI Component.
  *
- * `ChainClarifyComponent` is a single cohesive class whose fields/methods are
- * `private`; it is kept whole here (it cannot be split without relaxing field
- * visibility, which would change the class's API). It is an accepted R1
- * line-budget residual (see task implement.md, mirroring `runSingleAttempt`).
- * Pure helpers + types live in the sibling submodules of `./chain-clarify/`.
+ * `ChainClarifyComponent` owns the interactive state (selection, edit buffers,
+ * behavior overrides) and the input handlers that mutate it. Pure rendering and
+ * behavior-derivation logic live in the sibling submodules of `./chain-clarify/`:
+ *
+ * - `chain-clarify-format.ts` — border/row/header/footer primitives
+ * - `chain-clarify-behavior.ts` — effective behavior/model/thinking readers
+ * - `chain-clarify-selectors.ts` — model/thinking/skill/full-edit selector views
+ * - `chain-clarify-modes.ts` — single/parallel/chain navigation views
+ * - `chain-clarify-view.ts` — the read-only `ChainClarifyView` projection
+ *
+ * Renderers receive a `ChainClarifyView` (a fresh snapshot of the private state
+ * built by `buildView`) so no field visibility needs to change. Mutation stays
+ * entirely within this class.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../../../agents/agents.ts";
 import type { ResolvedStepBehavior } from "../../../shared/settings.ts";
-import { resolveModelCandidate, splitThinkingSuffix } from "../../shared/model-fallback.ts";
+import { splitThinkingSuffix } from "../../shared/model-fallback.ts";
 import { findModelInfo, getSupportedThinkingLevels, type ModelInfo, type ThinkingLevel } from "../../../shared/model-info.ts";
 import type { BehaviorOverride, ChainClarifyResult, ClarifyMode, EditMode } from "./types.ts";
-import { createEditorState, ensureCursorVisible, getCursorDisplayPos, handleEditorInput, renderEditor, wrapText, type TextEditorState } from "./text-editor.ts";
+import { computeAvailableThinkingLevels, computeEffectiveBehavior, computeEffectiveModel } from "./chain-clarify-behavior.ts";
+import type { ChainClarifyView } from "./chain-clarify-view.ts";
+import { renderFullEditModeView, renderModelSelectorView, renderSkillSelectorView, renderThinkingSelectorView } from "./chain-clarify-selectors.ts";
+import { renderChainModeView, renderParallelModeView, renderSingleModeView } from "./chain-clarify-modes.ts";
+import { createEditorState, handleEditorInput, wrapText, getCursorDisplayPos, type TextEditorState } from "./text-editor.ts";
 
 /**
  * TUI component for chain clarification.
@@ -35,7 +47,6 @@ export class ChainClarifyComponent implements Component {
 	private modelSearchQuery: string = "";
 	private modelSelectedIndex: number = 0;
 	private filteredModels: ModelInfo[] = [];
-	private readonly MODEL_SELECTOR_HEIGHT = 10;
 	private thinkingSelectedIndex: number = 0;
 	private skillSearchQuery: string = "";
 	private skillSelectedNames: Set<string> = new Set();
@@ -88,151 +99,52 @@ export class ChainClarifyComponent implements Component {
 		this.filteredSkills = [...availableSkills];
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Helper methods for rendering
-	// ─────────────────────────────────────────────────────────────────────────────
-
-	/** Pad string to specified visible width */
-	private pad(s: string, len: number): string {
-		const vis = visibleWidth(s);
-		return s + " ".repeat(Math.max(0, len - vis));
-	}
-
-	/** Create a row with border characters */
-	private row(content: string): string {
-		const innerW = this.width - 2;
-		return this.theme.fg("border", "│") + this.pad(content, innerW) + this.theme.fg("border", "│");
-	}
-
-	/** Render centered header line with border */
-	private renderHeader(text: string): string {
-		const innerW = this.width - 2;
-		const padLen = Math.max(0, innerW - visibleWidth(text));
-		const padLeft = Math.floor(padLen / 2);
-		const padRight = padLen - padLeft;
-		return (
-			this.theme.fg("border", "╭" + "─".repeat(padLeft)) +
-			this.theme.fg("accent", text) +
-			this.theme.fg("border", "─".repeat(padRight) + "╮")
-		);
-	}
-
-	/** Render centered footer line with border */
-	private renderFooter(text: string): string {
-		const innerW = this.width - 2;
-		const padLen = Math.max(0, innerW - visibleWidth(text));
-		const padLeft = Math.floor(padLen / 2);
-		const padRight = padLen - padLeft;
-		return (
-			this.theme.fg("border", "╰" + "─".repeat(padLeft)) +
-			this.theme.fg("dim", text) +
-			this.theme.fg("border", "─".repeat(padRight) + "╯")
-		);
-	}
-
-	/** Exit edit mode and reset state */
-	private exitEditMode(): void {
-		this.editingStep = null;
-		this.editState = createEditorState();
-		this.tui.requestRender();
-	}
-
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Full edit mode methods
-	// ─────────────────────────────────────────────────────────────────────────────
-
-	/** Render the full-edit takeover view */
-	private renderFullEditMode(): string[] {
-		const innerW = this.width - 2;
-		const textWidth = innerW - 2; // 1 char padding on each side
-		const lines: string[] = [];
-
-		const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
-		const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
-		this.editState = {
-			...this.editState,
-			viewportOffset: ensureCursorVisible(
-				cursorPos.line,
-				this.EDIT_VIEWPORT_HEIGHT,
-				this.editState.viewportOffset,
-			),
-		};
-
-		// Header (truncate agent name to prevent overflow)
-		const fieldName = this.editMode === "template" ? "task" : this.editMode;
-		const rawAgentName = this.agentConfigs[this.editingStep!]?.name ?? "unknown";
-		const maxAgentLen = innerW - 30; // Reserve space for " Editing X (Step/Task N: ) "
-		const agentName = rawAgentName.length > maxAgentLen
-			? rawAgentName.slice(0, maxAgentLen - 1) + "…"
-			: rawAgentName;
-		// Use mode-appropriate terminology
-		const stepLabel = this.mode === 'single' 
-			? agentName 
-			: this.mode === 'parallel' 
-				? `Task ${this.editingStep! + 1}: ${agentName}` 
-				: `Step ${this.editingStep! + 1}: ${agentName}`;
-		const headerText = ` Editing ${fieldName} (${stepLabel}) `;
-		lines.push(this.renderHeader(headerText));
-		lines.push(this.row(""));
-
-		const editorLines = renderEditor(this.editState, textWidth, this.EDIT_VIEWPORT_HEIGHT);
-		for (const line of editorLines) {
-			lines.push(this.row(` ${line}`));
-		}
-
-		const linesBelow = wrapped.length - this.editState.viewportOffset - this.EDIT_VIEWPORT_HEIGHT;
-		const hasMore = linesBelow > 0;
-		const hasLess = this.editState.viewportOffset > 0;
-		let scrollInfo = "";
-		if (hasLess) scrollInfo += "↑";
-		if (hasMore) scrollInfo += `↓ ${linesBelow}+`;
-
-		lines.push(this.row(""));
-
-		const footerText = scrollInfo
-			? ` [Esc] Done • [Ctrl+C] Discard • ${scrollInfo} `
-			: " [Esc] Done • [Ctrl+C] Discard ";
-		lines.push(this.renderFooter(footerText));
-
-		return lines;
-	}
-
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Behavior helpers
-	// ─────────────────────────────────────────────────────────────────────────────
-
-	/** Get effective behavior for a step (with user overrides applied) */
-	private getEffectiveBehavior(stepIndex: number): ResolvedStepBehavior {
-		const base = this.resolvedBehaviors[stepIndex]!;
-		const override = this.behaviorOverrides.get(stepIndex);
-		if (!override) return base;
-
+	private buildView(): ChainClarifyView {
 		return {
-			output: override.output !== undefined ? override.output : base.output,
-			outputMode: base.outputMode,
-			reads: override.reads !== undefined ? override.reads : base.reads,
-			progress: override.progress !== undefined ? override.progress : base.progress,
-			skills: override.skills !== undefined ? override.skills : base.skills,
-			model: override.model !== undefined ? override.model : base.model,
+			width: this.width,
+			theme: this.theme,
+			mode: this.mode,
+			agentConfigs: this.agentConfigs,
+			templates: this.templates,
+			originalTask: this.originalTask,
+			chainDir: this.chainDir,
+			resolvedBehaviors: this.resolvedBehaviors,
+			availableModels: this.availableModels,
+			preferredProvider: this.preferredProvider,
+			behaviorOverrides: this.behaviorOverrides,
+			selectedStep: this.selectedStep,
+			editingStep: this.editingStep,
+			editMode: this.editMode,
+			runInBackground: this.runInBackground,
+			noticeMessage: this.noticeMessage,
+			modelSearchQuery: this.modelSearchQuery,
+			modelSelectedIndex: this.modelSelectedIndex,
+			filteredModels: this.filteredModels,
+			thinkingSelectedIndex: this.thinkingSelectedIndex,
+			skillSearchQuery: this.skillSearchQuery,
+			skillSelectedNames: this.skillSelectedNames,
+			skillCursorIndex: this.skillCursorIndex,
+			filteredSkills: this.filteredSkills,
+			editViewportHeight: this.EDIT_VIEWPORT_HEIGHT,
 		};
 	}
 
-	/** Get the effective model for a step (override or agent default) */
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Behavior helpers (delegate to chain-clarify-behavior.ts)
+	// ─────────────────────────────────────────────────────────────────────────────
+
+	private getEffectiveBehavior(stepIndex: number): ResolvedStepBehavior {
+		return computeEffectiveBehavior(this.resolvedBehaviors, this.behaviorOverrides, stepIndex);
+	}
+
 	private getEffectiveModel(stepIndex: number): string {
-		const override = this.behaviorOverrides.get(stepIndex);
-		if (override?.model) return this.resolveModelFullId(override.model);
-
-		const baseModel = this.resolvedBehaviors[stepIndex]?.model;
-		if (baseModel) return this.resolveModelFullId(baseModel);
-		return "default";
+		return computeEffectiveModel(this.resolvedBehaviors, this.behaviorOverrides, this.availableModels, this.preferredProvider, stepIndex);
 	}
 
-	/** Resolve a model name to its full provider/model format */
-	private resolveModelFullId(modelName: string): string {
-		return resolveModelCandidate(modelName, this.availableModels, this.preferredProvider) ?? modelName;
+	private getAvailableThinkingLevels(stepIndex: number): ThinkingLevel[] {
+		return computeAvailableThinkingLevels(this.resolvedBehaviors, this.behaviorOverrides, this.availableModels, this.preferredProvider, stepIndex);
 	}
 
-	/** Update a behavior override for a step */
 	private updateBehavior(stepIndex: number, field: keyof BehaviorOverride, value: string | boolean | string[] | false): void {
 		const existing = this.behaviorOverrides.get(stepIndex) ?? {};
 		this.behaviorOverrides.set(stepIndex, { ...existing, [field]: value });
@@ -248,6 +160,17 @@ export class ChainClarifyComponent implements Component {
 		}, 2000);
 		this.tui.requestRender();
 	}
+
+	/** Exit edit mode and reset state */
+	private exitEditMode(): void {
+		this.editingStep = null;
+		this.editState = createEditorState();
+		this.tui.requestRender();
+	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Input handling
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	handleInput(data: string): void {
 		if (this.editingStep !== null) {
@@ -453,10 +376,6 @@ export class ChainClarifyComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
-	}
-
-	private getAvailableThinkingLevels(stepIndex: number): ThinkingLevel[] {
-		return getSupportedThinkingLevels(findModelInfo(this.getEffectiveModel(stepIndex), this.availableModels, this.preferredProvider));
 	}
 
 	/** Enter thinking level selector mode */
@@ -685,7 +604,7 @@ export class ChainClarifyComponent implements Component {
 		// Check all downstream steps (steps that come after the changed step)
 		for (let i = changedStepIndex + 1; i < this.agentConfigs.length; i++) {
 			const behavior = this.getEffectiveBehavior(i);
-			
+
 			// Skip if reads is disabled or empty
 			if (behavior.reads === false || !behavior.reads || behavior.reads.length === 0) {
 				continue;
@@ -694,7 +613,7 @@ export class ChainClarifyComponent implements Component {
 			// Check if this step reads the old output file
 			const readsArray = behavior.reads;
 			const oldIndex = readsArray.indexOf(oldOutput);
-			
+
 			if (oldIndex !== -1) {
 				// Replace old filename with new filename in reads
 				const newReads = [...readsArray];
@@ -704,451 +623,36 @@ export class ChainClarifyComponent implements Component {
 		}
 	}
 
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Rendering (delegates to chain-clarify-selectors.ts / chain-clarify-modes.ts)
+	// ─────────────────────────────────────────────────────────────────────────────
+
 	render(_width: number): string[] {
 		if (this.editingStep !== null) {
 			if (this.editMode === "model") {
-				return this.renderModelSelector();
+				return renderModelSelectorView(this.buildView());
 			}
 			if (this.editMode === "thinking") {
 				return this.renderThinkingSelector();
 			}
 			if (this.editMode === "skills") {
-				return this.renderSkillSelector();
+				return renderSkillSelectorView(this.buildView());
 			}
-			return this.renderFullEditMode();
+			const result = renderFullEditModeView(this.buildView(), this.editState);
+			this.editState = result.editState;
+			return result.lines;
 		}
 		// Mode-based navigation rendering
 		switch (this.mode) {
-			case 'single': return this.renderSingleMode();
-			case 'parallel': return this.renderParallelMode();
-			case 'chain': return this.renderChainMode();
+			case 'single': return renderSingleModeView(this.buildView());
+			case 'parallel': return renderParallelModeView(this.buildView());
+			case 'chain': return renderChainModeView(this.buildView());
 		}
-	}
-
-	/** Render the model selector view */
-	private renderModelSelector(): string[] {
-		const th = this.theme;
-		const lines: string[] = [];
-
-		// Header (mode-aware terminology)
-		const agentName = this.agentConfigs[this.editingStep!]?.name ?? "unknown";
-		const stepLabel = this.mode === 'single' 
-			? agentName 
-			: this.mode === 'parallel' 
-				? `Task ${this.editingStep! + 1}: ${agentName}` 
-				: `Step ${this.editingStep! + 1}: ${agentName}`;
-		const headerText = ` Select Model (${stepLabel}) `;
-		lines.push(this.renderHeader(headerText));
-		lines.push(this.row(""));
-
-		const searchPrefix = th.fg("dim", "Search: ");
-		const cursor = "\x1b[7m \x1b[27m"; // Reverse video space for cursor
-		const searchDisplay = this.modelSearchQuery + cursor;
-		lines.push(this.row(` ${searchPrefix}${searchDisplay}`));
-		lines.push(this.row(""));
-
-		const currentModel = this.getEffectiveModel(this.editingStep!);
-		const currentModelBase = splitThinkingSuffix(currentModel).baseModel;
-		const currentLabel = th.fg("dim", "Current: ");
-		lines.push(this.row(` ${currentLabel}${th.fg("warning", currentModel)}`));
-		lines.push(this.row(""));
-
-		if (this.filteredModels.length === 0) {
-			lines.push(this.row(` ${th.fg("dim", "No matching models")}`));
-		} else {
-			const maxVisible = this.MODEL_SELECTOR_HEIGHT;
-			let startIdx = 0;
-
-			if (this.filteredModels.length > maxVisible) {
-				startIdx = Math.max(0, this.modelSelectedIndex - Math.floor(maxVisible / 2));
-				startIdx = Math.min(startIdx, this.filteredModels.length - maxVisible);
-			}
-
-			const endIdx = Math.min(startIdx + maxVisible, this.filteredModels.length);
-
-			if (startIdx > 0) {
-				lines.push(this.row(` ${th.fg("dim", `  ↑ ${startIdx} more`)}`));
-			}
-
-			for (let i = startIdx; i < endIdx; i++) {
-				const model = this.filteredModels[i]!;
-				const isSelected = i === this.modelSelectedIndex;
-				const isCurrent = model.fullId === currentModelBase || model.id === currentModelBase;
-				const prefix = isSelected ? th.fg("accent", "→ ") : "  ";
-				const modelText = isSelected ? th.fg("accent", model.id) : model.id;
-				const providerBadge = th.fg("dim", ` [${model.provider}]`);
-				const currentBadge = isCurrent ? th.fg("success", " current") : "";
-
-				lines.push(this.row(` ${prefix}${modelText}${providerBadge}${currentBadge}`));
-			}
-
-			const remaining = this.filteredModels.length - endIdx;
-			if (remaining > 0) {
-				lines.push(this.row(` ${th.fg("dim", `  ↓ ${remaining} more`)}`));
-			}
-		}
-
-		const contentLines = lines.length;
-		const targetHeight = 18;
-		for (let i = contentLines; i < targetHeight; i++) {
-			lines.push(this.row(""));
-		}
-
-		const footerText = " [Enter] Select • [Esc] Cancel • Type to search ";
-		lines.push(this.renderFooter(footerText));
-
-		return lines;
 	}
 
 	/** Render the thinking level selector view */
 	private renderThinkingSelector(): string[] {
-		const th = this.theme;
-		const lines: string[] = [];
-
-		const agentName = this.agentConfigs[this.editingStep!]?.name ?? "unknown";
-		const stepLabel = this.mode === 'single' 
-			? agentName 
-			: this.mode === 'parallel' 
-				? `Task ${this.editingStep! + 1}: ${agentName}` 
-				: `Step ${this.editingStep! + 1}: ${agentName}`;
-		const headerText = ` Thinking Level (${stepLabel}) `;
-		lines.push(this.renderHeader(headerText));
-		lines.push(this.row(""));
-
-		const currentModel = this.getEffectiveModel(this.editingStep!);
-		const currentLabel = th.fg("dim", "Model: ");
-		lines.push(this.row(` ${currentLabel}${th.fg("accent", currentModel)}`));
-		lines.push(this.row(""));
-
-		lines.push(this.row(` ${th.fg("dim", "Select thinking level (extended thinking budget):")}`));
-		lines.push(this.row(""));
-
-		const levelDescriptions: Record<ThinkingLevel, string> = {
-			"off": "No extended thinking",
-			"minimal": "Brief reasoning",
-			"low": "Light reasoning",
-			"medium": "Moderate reasoning",
-			"high": "Deep reasoning",
-			"xhigh": "Maximum reasoning (ultrathink)",
-		};
-
-		const levels = this.getAvailableThinkingLevels(this.editingStep!);
-		if (levels.length === 0) {
-			lines.push(this.row(` ${th.fg("dim", "No supported thinking levels")}`));
-		} else {
-			for (let i = 0; i < levels.length; i++) {
-				const level = levels[i]!;
-				const isSelected = i === this.thinkingSelectedIndex;
-				const prefix = isSelected ? th.fg("accent", "→ ") : "  ";
-				const levelText = isSelected ? th.fg("accent", level) : level;
-				const desc = th.fg("dim", ` - ${levelDescriptions[level]}`);
-				lines.push(this.row(` ${prefix}${levelText}${desc}`));
-			}
-		}
-
-		const contentLines = lines.length;
-		const targetHeight = 16;
-		for (let i = contentLines; i < targetHeight; i++) {
-			lines.push(this.row(""));
-		}
-
-		const footerText = levels.length === 0
-			? " [Esc] Cancel "
-			: " [Enter] Select • [Esc] Cancel • ↑↓ Navigate ";
-		lines.push(this.renderFooter(footerText));
-
-		return lines;
-	}
-
-	private renderSkillSelector(): string[] {
-		const innerW = this.width - 2;
-		const th = this.theme;
-		const lines: string[] = [];
-
-		const agentName = this.agentConfigs[this.editingStep!]?.name ?? "unknown";
-		const stepLabel = this.mode === 'single'
-			? agentName
-			: this.mode === 'parallel'
-				? `Task ${this.editingStep! + 1}: ${agentName}`
-				: `Step ${this.editingStep! + 1}: ${agentName}`;
-		lines.push(this.renderHeader(` Select Skills (${stepLabel}) `));
-		lines.push(this.row(""));
-
-		const cursor = "\x1b[7m \x1b[27m";
-		lines.push(this.row(` ${th.fg("dim", "Search: ")}${this.skillSearchQuery}${cursor}`));
-		lines.push(this.row(""));
-
-		const selected = [...this.skillSelectedNames].join(", ") || th.fg("dim", "(none)");
-		lines.push(this.row(` ${th.fg("dim", "Selected: ")}${truncateToWidth(selected, innerW - 12)}`));
-		lines.push(this.row(""));
-
-		const selectorHeight = 10;
-		if (this.filteredSkills.length === 0) {
-			lines.push(this.row(` ${th.fg("dim", "No matching skills")}`));
-		} else {
-			let startIdx = 0;
-			if (this.filteredSkills.length > selectorHeight) {
-				startIdx = Math.max(0, this.skillCursorIndex - Math.floor(selectorHeight / 2));
-				startIdx = Math.min(startIdx, this.filteredSkills.length - selectorHeight);
-			}
-			const endIdx = Math.min(startIdx + selectorHeight, this.filteredSkills.length);
-
-			if (startIdx > 0) {
-				lines.push(this.row(` ${th.fg("dim", `  ↑ ${startIdx} more`)}`));
-			}
-
-			for (let i = startIdx; i < endIdx; i++) {
-				const skill = this.filteredSkills[i]!;
-				const isCursor = i === this.skillCursorIndex;
-				const isSelected = this.skillSelectedNames.has(skill.name);
-
-				const prefix = isCursor ? th.fg("accent", "→ ") : "  ";
-				const checkbox = isSelected ? th.fg("success", "[x]") : "[ ]";
-				const nameText = isCursor ? th.fg("accent", skill.name) : skill.name;
-				const sourceBadge = th.fg("dim", ` [${skill.source}]`);
-				const desc = skill.description
-					? th.fg("dim", ` - ${truncateToWidth(skill.description, 25)}`)
-					: "";
-
-				lines.push(this.row(` ${prefix}${checkbox} ${nameText}${sourceBadge}${desc}`));
-			}
-
-			const remaining = this.filteredSkills.length - endIdx;
-			if (remaining > 0) {
-				lines.push(this.row(` ${th.fg("dim", `  ↓ ${remaining} more`)}`));
-			}
-		}
-
-		const targetHeight = 18;
-		for (let i = lines.length; i < targetHeight; i++) {
-			lines.push(this.row(""));
-		}
-
-		lines.push(this.renderFooter(" [Enter] Confirm • [Space] Toggle • [Esc] Cancel "));
-		return lines;
-	}
-
-	private getFooterText(): string {
-		const bgLabel = this.runInBackground ? '[b]g:ON' : '[b]g';
-		switch (this.mode) {
-			case 'single':
-				return ` [Enter] Run • [Esc] Cancel • e m t w s ${bgLabel} `;
-			case 'parallel':
-				return ` [Enter] Run • [Esc] Cancel • e m t s ${bgLabel} • ↑↓ Nav `;
-			case 'chain':
-				return ` [Enter] Run • [Esc] Cancel • e m t w r p s ${bgLabel} • ↑↓ Nav `;
-		}
-	}
-
-	private appendNotice(lines: string[]): void {
-		if (!this.noticeMessage) return;
-		const color = this.noticeMessage.type === "error" ? "error" : "success";
-		lines.push(this.row(` ${this.theme.fg(color, this.noticeMessage.text)}`));
-	}
-
-	private renderSingleMode(): string[] {
-		const innerW = this.width - 2;
-		const th = this.theme;
-		const lines: string[] = [];
-
-		const agentName = this.agentConfigs[0]?.name ?? "unknown";
-		const maxHeaderLen = innerW - 4;
-		const headerText = ` Agent: ${truncateToWidth(agentName, maxHeaderLen - 9)} `;
-		lines.push(this.renderHeader(headerText));
-		lines.push(this.row(""));
-
-		const config = this.agentConfigs[0]!;
-		const behavior = this.getEffectiveBehavior(0);
-
-		const stepLabel = config.name;
-		lines.push(this.row(` ${th.fg("accent", "▶ " + stepLabel)}`));
-
-		const template = (this.templates[0] ?? "").split("\n")[0] ?? "";
-		const taskLabel = th.fg("dim", "task: ");
-		lines.push(this.row(`     ${taskLabel}${truncateToWidth(template, innerW - 12)}`));
-
-		const effectiveModel = this.getEffectiveModel(0);
-		const override = this.behaviorOverrides.get(0);
-		const isOverridden = override?.model !== undefined;
-		const modelValue = isOverridden
-			? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
-			: effectiveModel;
-		const modelLabel = th.fg("dim", "model: ");
-		lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
-
-		const writesValue = behavior.output === false
-			? th.fg("dim", "(disabled)")
-			: (behavior.output || th.fg("dim", "(none)"));
-		const writesLabel = th.fg("dim", "writes: ");
-		lines.push(this.row(`     ${writesLabel}${truncateToWidth(writesValue, innerW - 14)}`));
-
-		const skillsValue = behavior.skills === false
-			? th.fg("dim", "(disabled)")
-			: (behavior.skills?.length ? behavior.skills.join(", ") : th.fg("dim", "(none)"));
-		const skillsLabel = th.fg("dim", "skills: ");
-		lines.push(this.row(`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`));
-
-		lines.push(this.row(""));
-
-		this.appendNotice(lines);
-		lines.push(this.renderFooter(this.getFooterText()));
-
-		return lines;
-	}
-
-	private renderParallelMode(): string[] {
-		const innerW = this.width - 2;
-		const th = this.theme;
-		const lines: string[] = [];
-
-		const headerText = ` Parallel Tasks (${this.agentConfigs.length}) `;
-		lines.push(this.renderHeader(headerText));
-		lines.push(this.row(""));
-
-		for (let i = 0; i < this.agentConfigs.length; i++) {
-			const config = this.agentConfigs[i]!;
-			const isSelected = i === this.selectedStep;
-
-			const color = isSelected ? "accent" : "dim";
-			const prefix = isSelected ? "▶ " : "  ";
-			const taskPrefix = `Task ${i + 1}: `;
-			const maxNameLen = innerW - 4 - prefix.length - taskPrefix.length;
-			const agentName = config.name.length > maxNameLen
-				? config.name.slice(0, maxNameLen - 1) + "…"
-				: config.name;
-			const taskLabel = `${taskPrefix}${agentName}`;
-			lines.push(this.row(` ${th.fg(color, prefix + taskLabel)}`));
-
-			const template = (this.templates[i] ?? "").split("\n")[0] ?? "";
-			const taskTextLabel = th.fg("dim", "task: ");
-			lines.push(this.row(`     ${taskTextLabel}${truncateToWidth(template, innerW - 12)}`));
-
-			const effectiveModel = this.getEffectiveModel(i);
-			const override = this.behaviorOverrides.get(i);
-			const isOverridden = override?.model !== undefined;
-			const modelValue = isOverridden
-				? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
-				: effectiveModel;
-			const modelLabel = th.fg("dim", "model: ");
-			lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
-
-			const behavior = this.getEffectiveBehavior(i);
-			const skillsValue = behavior.skills === false
-				? th.fg("dim", "(disabled)")
-				: (behavior.skills?.length ? behavior.skills.join(", ") : th.fg("dim", "(none)"));
-			const skillsLabel = th.fg("dim", "skills: ");
-			lines.push(this.row(`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`));
-
-			lines.push(this.row(""));
-		}
-
-		this.appendNotice(lines);
-		lines.push(this.renderFooter(this.getFooterText()));
-
-		return lines;
-	}
-
-	private renderChainMode(): string[] {
-		const innerW = this.width - 2;
-		const th = this.theme;
-		const lines: string[] = [];
-
-		const chainLabel = this.agentConfigs.map((c) => c.name).join(" → ");
-		const maxHeaderLen = innerW - 4;
-		const headerText = ` Chain: ${truncateToWidth(chainLabel, maxHeaderLen - 9)} `;
-		lines.push(this.renderHeader(headerText));
-
-		lines.push(this.row(""));
-
-		const taskPreview = truncateToWidth(this.originalTask, innerW - 16);
-		lines.push(this.row(` Original Task: ${taskPreview}`));
-		const chainDirPreview = truncateToWidth(this.chainDir ?? "", innerW - 12);
-		lines.push(this.row(` Chain Dir: ${th.fg("dim", chainDirPreview)}`));
-
-		const progressEnabled = this.agentConfigs.some((_, i) => this.getEffectiveBehavior(i).progress);
-		const progressValue = progressEnabled ? th.fg("success", "enabled") : th.fg("dim", "disabled");
-		lines.push(this.row(` Progress: ${progressValue} ${th.fg("dim", "(press [p] to toggle)")}`));
-		lines.push(this.row(""));
-
-		for (let i = 0; i < this.agentConfigs.length; i++) {
-			const config = this.agentConfigs[i]!;
-			const isSelected = i === this.selectedStep;
-			const behavior = this.getEffectiveBehavior(i);
-
-			const color = isSelected ? "accent" : "dim";
-			const prefix = isSelected ? "▶ " : "  ";
-			const stepPrefix = `Step ${i + 1}: `;
-			const maxNameLen = innerW - 4 - prefix.length - stepPrefix.length;
-			const agentName = config.name.length > maxNameLen
-				? config.name.slice(0, maxNameLen - 1) + "…"
-				: config.name;
-			const stepLabel = `${stepPrefix}${agentName}`;
-			lines.push(
-				this.row(` ${th.fg(color, prefix + stepLabel)}`),
-			);
-
-			const template = (this.templates[i] ?? "").split("\n")[0] ?? "";
-			const highlighted = template
-				.replace(/\{task\}/g, th.fg("success", "{task}"))
-				.replace(/\{previous\}/g, th.fg("warning", "{previous}"))
-				.replace(/\{chain_dir\}/g, th.fg("accent", "{chain_dir}"));
-
-			const templateLabel = th.fg("dim", "task: ");
-			lines.push(this.row(`     ${templateLabel}${truncateToWidth(highlighted, innerW - 12)}`));
-
-			const effectiveModel = this.getEffectiveModel(i);
-			const override = this.behaviorOverrides.get(i);
-			const isOverridden = override?.model !== undefined;
-			const modelValue = isOverridden
-				? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
-				: effectiveModel;
-			const modelLabel = th.fg("dim", "model: ");
-			lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
-
-			const writesValue = behavior.output === false
-				? th.fg("dim", "(disabled)")
-				: (behavior.output || th.fg("dim", "(none)"));
-			const writesLabel = th.fg("dim", "writes: ");
-			lines.push(this.row(`     ${writesLabel}${truncateToWidth(writesValue, innerW - 14)}`));
-
-			const readsValue = behavior.reads === false
-				? th.fg("dim", "(disabled)")
-				: (behavior.reads && behavior.reads.length > 0
-					? behavior.reads.join(", ")
-					: th.fg("dim", "(none)"));
-			const readsLabel = th.fg("dim", "reads: ");
-			lines.push(this.row(`     ${readsLabel}${truncateToWidth(readsValue, innerW - 13)}`));
-
-			const skillsValue = behavior.skills === false
-				? th.fg("dim", "(disabled)")
-				: (behavior.skills?.length ? behavior.skills.join(", ") : th.fg("dim", "(none)"));
-			const skillsLabel = th.fg("dim", "skills: ");
-			lines.push(this.row(`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`));
-
-			if (progressEnabled) {
-				const isFirstStep = i === 0;
-				const progressAction = isFirstStep 
-					? th.fg("success", "writes progress.md")
-					: th.fg("accent", "reads progress.md");
-				const progressLabel = th.fg("dim", "progress: ");
-				lines.push(this.row(`     ${progressLabel}${progressAction}`));
-			}
-
-			if (i < this.agentConfigs.length - 1) {
-				const nextStepUsePrevious = (this.templates[i + 1] ?? "").includes("{previous}");
-				if (nextStepUsePrevious) {
-					const indicator = th.fg("dim", "     ↳ response → ") + th.fg("warning", "{previous}");
-					lines.push(this.row(indicator));
-				}
-			}
-
-			lines.push(this.row(""));
-		}
-
-		this.appendNotice(lines);
-		lines.push(this.renderFooter(this.getFooterText()));
-
-		return lines;
+		return renderThinkingSelectorView(this.buildView());
 	}
 
 	invalidate(): void {}

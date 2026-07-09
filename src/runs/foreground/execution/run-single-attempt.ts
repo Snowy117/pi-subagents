@@ -1,91 +1,55 @@
 /**
  * runSingleAttempt — run one subagent attempt (spawn child, stream events,
- * finalize result). The body is intentionally kept whole: it is one cohesive
- * concurrent routine whose nested closures share process-level state and
- * cannot be split across files without changing control flow.
+ * finalize result). Moved out of execution.ts as part of the foreground split.
  *
- * Moved out of execution.ts as part of the foreground split.
+ * The body was one cohesive concurrent routine whose ~21 inline closures share
+ * process-level mutable state. The closures were extracted into cohesive
+ * sibling modules (`single-attempt-*`); this module is the orchestrator that
+ * builds the shared `SingleAttemptState`, spawns the child, wires the
+ * extracted handlers onto the state object (in the original registration
+ * order), and awaits the exit code before delegating to `finalizeSingleAttempt`.
+ *
+ * R2 invariant: every extracted handler closes over the SAME `state` reference,
+ * so all mutations propagate identically to the original inline closures. No
+ * `await`, registration order, or mutation order changed.
  */
 
 import { spawn } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
-import type { Message } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "../../../agents/agents.ts";
-import {
-	ensureArtifactsDir,
-	getArtifactPaths,
-	writeArtifact,
-	writeMetadata,
-} from "../../../shared/artifacts.ts";
-import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../../shared/child-transcript.ts";
+import { createJsonlWriter } from "../../../shared/jsonl-writer.ts";
+import { attachPostExitStdioGuard } from "../../../shared/post-exit-stdio-guard.ts";
 import {
 	type AgentProgress,
-	type ArtifactPaths,
-	type ControlEvent,
-	type ModelAttempt,
 	type RunSyncOptions,
 	type SingleResult,
-	type Usage,
-	DEFAULT_MAX_OUTPUT,
-	INTERCOM_DETACH_REQUEST_EVENT,
-	INTERCOM_DETACH_RESPONSE_EVENT,
-	type AcceptanceLedger,
-	type ResolvedAcceptanceConfig,
-	truncateOutput,
 	getSubagentDepthEnv,
 } from "../../../shared/types.ts";
-import {
-	DEFAULT_CONTROL_CONFIG,
-	buildControlEvent,
-	claimControlNotification,
-	deriveActivityState,
-	shouldNotifyControlEvent,
-} from "../../shared/subagent-control.ts";
-import {
-	getFinalOutput,
-	findLatestSessionFile,
-	detectSubagentError,
-	extractToolArgsPreview,
-	extractTextFromContent,
-} from "../../../shared/utils.ts";
-import { buildSkillInjection, resolveSkillsWithFallback } from "../../../agents/skills.ts";
-import { buildAgentMemoryInjection } from "../../../agents/agent-memory.ts";
-import { evaluateCompletionMutationGuard } from "../../shared/completion-guard.ts";
+import { DEFAULT_CONTROL_CONFIG } from "../../shared/subagent-control.ts";
+import { applyThinkingSuffix, buildPiArgs } from "../../shared/pi-args.ts";
+import { appendTurnBudgetSystemPrompt, initialTurnBudgetState } from "../../shared/turn-budget.ts";
+import { initialToolBudgetState } from "../../shared/tool-budget.ts";
 import { getPiSpawnCommand } from "../../shared/pi-spawn.ts";
-import { createJsonlWriter } from "../../../shared/jsonl-writer.ts";
-import { attachPostExitStdioGuard, trySignalChild } from "../../../shared/post-exit-stdio-guard.ts";
-import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../../shared/pi-args.ts";
-import { readStructuredOutput } from "../../shared/structured-output.ts";
-import { captureSingleOutputSnapshot, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../../shared/single-output.ts";
 import {
-	buildModelCandidates,
-	formatModelAttemptNote,
-	isRetryableModelFailure,
-} from "../../shared/model-fallback.ts";
-import {
-	createMutatingFailureState,
-	didMutatingToolFail,
-	isMutatingTool,
-	nextLongRunningTrigger,
-	recordMutatingFailure,
-	resetMutatingFailureState,
-	resolveCurrentPath,
-	shouldEscalateMutatingFailures,
-	summarizeRecentMutatingFailures,
-} from "../../shared/long-running-guard.ts";
-import { acceptanceFailureMessage, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport } from "../../shared/acceptance.ts";
-import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, shouldAbortForTurnBudget, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../../shared/turn-budget.ts";
-import { initialToolBudgetState, toolBudgetState } from "../../shared/tool-budget.ts";
-import {
-	acceptanceOutputByResult,
-	appendRecentOutput,
-	artifactOutputByResult,
 	emptyUsage,
-	formatTimeoutMessage,
 	resolveAttemptTimeout,
-	snapshotProgress,
-	snapshotResult,
 } from "./attempt-helpers.ts";
+import {
+	type SingleAttemptShared,
+	createSingleAttemptState,
+} from "./single-attempt-state.ts";
+import { attachLifecycleHandlers } from "./single-attempt-lifecycle.ts";
+import { attachControlHandlers } from "./single-attempt-control.ts";
+import { attachBudgetHandlers } from "./single-attempt-budget.ts";
+import { attachEventHandlers } from "./single-attempt-events.ts";
+import {
+	registerIntercomDetach,
+	registerProcessHandlers,
+	registerSignalHandlers,
+	startActivityTimer,
+	startTimeoutTimer,
+} from "./single-attempt-process.ts";
+import { finalizeSingleAttempt } from "./single-attempt-finalize.ts";
 
 export async function runSingleAttempt(
 	runtimeCwd: string,
@@ -93,18 +57,7 @@ export async function runSingleAttempt(
 	task: string,
 	model: string | undefined,
 	options: RunSyncOptions,
-	shared: {
-		sessionEnabled: boolean;
-		systemPrompt: string;
-		resolvedSkillNames?: string[];
-		skillsWarning?: string;
-		jsonlPath?: string;
-		artifactPaths?: ArtifactPaths;
-		transcriptWriter?: ChildTranscriptWriter;
-		attemptNotes: string[];
-		outputSnapshot?: SingleOutputSnapshot;
-		originalTask?: string;
-	},
+	shared: SingleAttemptShared,
 ): Promise<SingleResult> {
 	const effectiveThinking = options.thinkingOverride ?? agent.thinking;
 	const modelArg = applyThinkingSuffix(model, effectiveThinking, options.thinkingOverride !== undefined);
@@ -164,18 +117,7 @@ export async function runSingleAttempt(
 		}
 	}
 	const controlConfig = options.controlConfig ?? DEFAULT_CONTROL_CONFIG;
-	let interruptedByControl = false;
-	const allControlEvents: ControlEvent[] = [];
-	let pendingControlEvents: ControlEvent[] = [];
-	const emittedControlEventKeys = new Set<string>();
-	const emitControlEvent = (event: ControlEvent) => {
-		if (!shouldNotifyControlEvent(controlConfig, event)) return;
-		if (!claimControlNotification(controlConfig, event, emittedControlEventKeys)) return;
-		allControlEvents.push(event);
-		pendingControlEvents.push(event);
-		options.onControlEvent?.(event);
-	};
-
+	const attemptTimeout = resolveAttemptTimeout(options);
 	const progress: AgentProgress = {
 		index: options.index ?? 0,
 		agent: agent.name,
@@ -190,7 +132,6 @@ export async function runSingleAttempt(
 		lastActivityAt: startTime,
 	};
 	result.progress = progress;
-	const attemptTimeout = resolveAttemptTimeout(options);
 	if (attemptTimeout?.remainingMs === 0) {
 		result.exitCode = 1;
 		result.timedOut = true;
@@ -206,7 +147,23 @@ export async function runSingleAttempt(
 		return result;
 	}
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
-	let observedMutationAttempt = false;
+
+	const state = createSingleAttemptState({
+		options,
+		agent,
+		shared,
+		runtimeCwd,
+		task,
+		modelArg,
+		startTime,
+		controlConfig,
+		attemptTimeout,
+		args,
+		tempDir,
+		spawnEnv,
+	});
+	state.result = result;
+	state.progress = progress;
 
 	const exitCode = await new Promise<number>((resolve) => {
 		const spawnSpec = getPiSpawnCommand(args);
@@ -216,716 +173,24 @@ export async function runSingleAttempt(
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
 		});
-		const jsonlWriter = createJsonlWriter(shared.jsonlPath, proc.stdout);
-		let buf = "";
-		let processClosed = false;
-		let settled = false;
-		let detached = false;
-		let intercomStarted = false;
-		let assistantError: string | undefined;
-		let removeAbortListener: (() => void) | undefined;
-		let removeInterruptListener: (() => void) | undefined;
-		let activityTimer: NodeJS.Timeout | undefined;
-		let timeoutTimer: NodeJS.Timeout | undefined;
-		let timeoutTerminationTimer: NodeJS.Timeout | undefined;
-		let timeoutHardKillTimer: NodeJS.Timeout | undefined;
-		let turnBudgetSoftReached = false;
-		let turnBudgetTerminationTimer: NodeJS.Timeout | undefined;
-		let turnBudgetHardKillTimer: NodeJS.Timeout | undefined;
-		const clearTurnBudgetTimers = () => {
-			if (turnBudgetTerminationTimer) {
-				clearTimeout(turnBudgetTerminationTimer);
-				turnBudgetTerminationTimer = undefined;
-			}
-			if (turnBudgetHardKillTimer) {
-				clearTimeout(turnBudgetHardKillTimer);
-				turnBudgetHardKillTimer = undefined;
-			}
-		};
-		const clearTimeoutTimers = () => {
-			if (timeoutTimer) {
-				clearTimeout(timeoutTimer);
-				timeoutTimer = undefined;
-			}
-			if (timeoutTerminationTimer) {
-				clearTimeout(timeoutTerminationTimer);
-				timeoutTerminationTimer = undefined;
-			}
-			if (timeoutHardKillTimer) {
-				clearTimeout(timeoutHardKillTimer);
-				timeoutHardKillTimer = undefined;
-			}
-		};
+		state.proc = proc;
+		state.jsonlWriter = createJsonlWriter(shared.jsonlPath, proc.stdout);
+		state.resolve = resolve;
+		// Wire extracted handlers onto the shared state object before any event
+		// can fire (the executor runs to completion synchronously first).
+		attachLifecycleHandlers(state);
+		attachControlHandlers(state);
+		attachBudgetHandlers(state);
+		attachEventHandlers(state);
 
-		const detachForIntercom = () => {
-			detached = true;
-			processClosed = true;
-			result.detached = true;
-			result.detachedReason = "intercom coordination";
-			progress.status = "detached";
-			progress.durationMs = Date.now() - startTime;
-			result.progressSummary = {
-				toolCount: progress.toolCount,
-				tokens: progress.tokens,
-				durationMs: progress.durationMs,
-			};
-			finish(-2);
-		};
-
-		// If the child emits a terminal assistant stop but never exits,
-		// give it a short grace period to flush naturally, then clean it up.
-		const FINAL_STOP_GRACE_MS = 1000;
-		const HARD_KILL_MS = 3000;
-		let childExited = false;
-		let forcedTerminationSignal = false;
-		let cleanTerminalAssistantStopReceived = false;
-		let finalDrainTimer: NodeJS.Timeout | undefined;
-		let finalHardKillTimer: NodeJS.Timeout | undefined;
-		const clearFinalDrainTimers = () => {
-			if (finalDrainTimer) {
-				clearTimeout(finalDrainTimer);
-				finalDrainTimer = undefined;
-			}
-			if (finalHardKillTimer) {
-				clearTimeout(finalHardKillTimer);
-				finalHardKillTimer = undefined;
-			}
-		};
-		const startFinalDrain = () => {
-			if (childExited || finalDrainTimer || settled || processClosed || detached) return;
-			finalDrainTimer = setTimeout(() => {
-				if (settled || processClosed || detached) return;
-				const termSent = trySignalChild(proc, "SIGTERM");
-				if (!termSent) return;
-				forcedTerminationSignal = true;
-				if (!cleanTerminalAssistantStopReceived && !assistantError) {
-					result.error = result.error ?? `Subagent process did not exit within ${FINAL_STOP_GRACE_MS}ms after its final message. Forcing termination.`;
-				}
-				finalHardKillTimer = setTimeout(() => {
-					if (settled || processClosed || detached) return;
-					forcedTerminationSignal = trySignalChild(proc, "SIGKILL") || forcedTerminationSignal;
-				}, HARD_KILL_MS);
-				finalHardKillTimer.unref?.();
-			}, FINAL_STOP_GRACE_MS);
-			finalDrainTimer.unref?.();
-		};
-
-		const unsubscribeIntercomDetach = options.intercomEvents?.on?.(INTERCOM_DETACH_REQUEST_EVENT, (payload) => {
-			if (!options.allowIntercomDetach || detached || processClosed) return;
-			if (!payload || typeof payload !== "object") return;
-			const event = payload as { requestId?: unknown; runId?: unknown; agent?: unknown; childIndex?: unknown };
-			const requestId = event.requestId;
-			if (typeof requestId !== "string" || requestId.length === 0) return;
-			const hasRoute = event.runId !== undefined || event.agent !== undefined || event.childIndex !== undefined;
-			if (hasRoute) {
-				if (typeof event.runId === "string" && event.runId !== options.runId) return;
-				if (typeof event.agent === "string" && event.agent !== agent.name) return;
-				if (typeof event.childIndex === "number" && event.childIndex !== (options.index ?? 0)) return;
-			} else if (!intercomStarted) return;
-			options.intercomEvents?.emit(INTERCOM_DETACH_RESPONSE_EVENT, { requestId, accepted: true, runId: options.runId, agent: agent.name, childIndex: options.index ?? 0 });
-			detachForIntercom();
-		});
-
-		const finish = (code: number) => {
-			if (settled) return;
-			settled = true;
-			clearFinalDrainTimers();
-			clearStdioGuard();
-			clearTimeoutTimers();
-			clearTurnBudgetTimers();
-			if (activityTimer) {
-				clearInterval(activityTimer);
-				activityTimer = undefined;
-			}
-			unsubscribeIntercomDetach?.();
-			removeAbortListener?.();
-			removeInterruptListener?.();
-			resolve(code);
-		};
-
-		const drainPendingControlEvents = (): ControlEvent[] | undefined => {
-			if (pendingControlEvents.length === 0) return undefined;
-			const events = pendingControlEvents;
-			pendingControlEvents = [];
-			return events;
-		};
-
-		let activeLongRunningNotified = false;
-		let pendingToolResult: { tool: string; path?: string; mutates: boolean; startedAt?: number } | undefined;
-		const mutatingFailures = createMutatingFailureState();
-		const mutatingFailureWindowMs = 5 * 60_000;
-		const currentToolDurationMs = (now: number) => progress.currentToolStartedAt ? Math.max(0, now - progress.currentToolStartedAt) : undefined;
-		const emitNeedsAttention = (now: number, input: { message?: string; reason?: ControlEvent["reason"]; recentFailureSummary?: string; currentTool?: string; currentPath?: string; currentToolDurationMs?: number } = {}): boolean => {
-			if (!controlConfig.enabled) return false;
-			const previous = progress.activityState;
-			progress.activityState = "needs_attention";
-			const event = buildControlEvent({
-				type: "needs_attention",
-				from: previous,
-				to: "needs_attention",
-				runId: options.runId,
-				agent: agent.name,
-				index: options.index,
-				ts: now,
-				lastActivityAt: progress.lastActivityAt,
-				message: input.message,
-				reason: input.reason ?? "idle",
-				turns: result.usage.turns,
-				tokens: progress.tokens,
-				toolCount: progress.toolCount,
-				currentTool: input.currentTool ?? progress.currentTool,
-				currentToolDurationMs: input.currentToolDurationMs ?? currentToolDurationMs(now),
-				currentPath: input.currentPath ?? progress.currentPath,
-				recentFailureSummary: input.recentFailureSummary,
-			});
-			emitControlEvent(event);
-			return previous !== "needs_attention";
-		};
-		const emitActiveLongRunning = (now: number, reason: ControlEvent["reason"]): boolean => {
-			if (!controlConfig.enabled || activeLongRunningNotified || progress.activityState === "needs_attention") return false;
-			activeLongRunningNotified = true;
-			const previous = progress.activityState;
-			progress.activityState = "active_long_running";
-			emitControlEvent(buildControlEvent({
-				type: "active_long_running",
-				from: previous,
-				to: "active_long_running",
-				runId: options.runId,
-				agent: agent.name,
-				index: options.index,
-				ts: now,
-				message: `${agent.name} is still active but long-running`,
-				reason,
-				turns: result.usage.turns,
-				tokens: progress.tokens,
-				toolCount: progress.toolCount,
-				currentTool: progress.currentTool,
-				currentToolDurationMs: currentToolDurationMs(now),
-				currentPath: progress.currentPath,
-				elapsedMs: now - startTime,
-			}));
-			return true;
-		};
-		const requestTurnBudgetAbort = (turnCount: number) => {
-			const budget = options.turnBudget;
-			if (!budget || result.timedOut || result.turnBudgetExceeded || interruptedByControl || processClosed || settled || detached) return;
-			const message = turnBudgetExceededMessage(budget, turnCount);
-			result.turnBudgetExceeded = true;
-			result.wrapUpRequested = true;
-			result.turnBudget = turnBudgetState(budget, turnCount, true);
-			result.error = message;
-			result.finalOutput = message;
-			progress.status = "failed";
-			progress.error = message;
-			progress.durationMs = Date.now() - startTime;
-			fireUpdate();
-			trySignalChild(proc, "SIGINT");
-			turnBudgetTerminationTimer = setTimeout(() => {
-				if (processClosed || settled || detached || result.timedOut) return;
-				trySignalChild(proc, "SIGTERM");
-			}, 1000);
-			turnBudgetTerminationTimer.unref?.();
-			turnBudgetHardKillTimer = setTimeout(() => {
-				if (processClosed || settled || detached || result.timedOut) return;
-				trySignalChild(proc, "SIGKILL");
-			}, 4000);
-			turnBudgetHardKillTimer.unref?.();
-		};
-
-		const updateTurnBudget = (turnCount: number, terminalAssistantStop: boolean) => {
-			const budget = options.turnBudget;
-			if (!budget || result.timedOut || result.turnBudgetExceeded) return;
-			if (turnCount < budget.maxTurns) {
-				result.turnBudget = { ...budget, outcome: "within-budget", turnCount };
-				return;
-			}
-			if (!turnBudgetSoftReached) {
-				turnBudgetSoftReached = true;
-				result.wrapUpRequested = true;
-				appendRecentOutput(progress, [turnBudgetSoftNote(budget, turnCount)]);
-			}
-			result.turnBudget = turnBudgetState(budget, turnCount, false);
-			if (shouldAbortForTurnBudget(budget, turnCount, terminalAssistantStop)) {
-				requestTurnBudgetAbort(turnCount);
-			}
-		};
-
-		const updateActivityState = (now: number): boolean => {
-			if (!controlConfig.enabled) return false;
-			const idleState = deriveActivityState({
-				config: controlConfig,
-				startedAt: startTime,
-				lastActivityAt: progress.lastActivityAt,
-				now,
-			});
-			if (idleState === "needs_attention") {
-				return progress.activityState === "needs_attention" ? false : emitNeedsAttention(now);
-			}
-			const activeReason = nextLongRunningTrigger(controlConfig, {
-				startedAt: startTime,
-				now,
-				turns: result.usage.turns,
-				tokens: progress.tokens,
-			});
-			return activeReason ? emitActiveLongRunning(now, activeReason) : false;
-		};
-
-
-		const emitUpdateSnapshot = (text: string) => {
-			if (!options.onUpdate || processClosed) return;
-			const progressSnapshot = snapshotProgress(progress);
-			const resultSnapshot = snapshotResult(result, progressSnapshot);
-			const controlEvents = drainPendingControlEvents();
-			options.onUpdate({
-				content: [{ type: "text", text }],
-				details: {
-					mode: "single",
-					results: [resultSnapshot],
-					progress: [progressSnapshot],
-					controlEvents,
-				},
-			});
-		};
-
-		const fireUpdate = () => {
-			if (!options.onUpdate || processClosed) return;
-			progress.durationMs = Date.now() - startTime;
-			const output = (result.timedOut || result.turnBudgetExceeded) && result.finalOutput ? result.finalOutput : getFinalOutput(result.messages);
-			emitUpdateSnapshot(output || "(running...)");
-		};
-
-		const processLine = (line: string) => {
-			if (!line.trim()) return;
-			jsonlWriter.writeLine(line);
-			let evt: { type?: string; message?: Message; toolName?: string; args?: unknown };
-			try {
-				evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown };
-			} catch {
-				shared.transcriptWriter?.writeStdoutLine(line);
-				// Non-JSON stdout lines are expected; only structured events are parsed.
-				return;
-			}
-			shared.transcriptWriter?.writeChildEvent(evt);
-
-			const now = Date.now();
-			progress.durationMs = now - startTime;
-			progress.lastActivityAt = now;
-			updateActivityState(now);
-
-			if (evt.type === "tool_execution_start") {
-				const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
-					? evt.args as Record<string, unknown>
-					: {};
-				if (options.allowIntercomDetach && (evt.toolName === "intercom" || evt.toolName === "contact_supervisor")) {
-					intercomStarted = true;
-				}
-				progress.toolCount++;
-				if (options.toolBudget) {
-					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount);
-				}
-				progress.currentTool = evt.toolName;
-				progress.currentToolArgs = extractToolArgsPreview(toolArgs);
-				progress.currentToolStartedAt = now;
-				progress.currentPath = resolveCurrentPath(evt.toolName, toolArgs);
-				const mutates = isMutatingTool(evt.toolName, toolArgs);
-				observedMutationAttempt = observedMutationAttempt || mutates;
-				pendingToolResult = { tool: evt.toolName ?? "tool", path: progress.currentPath, mutates, startedAt: now };
-				fireUpdate();
-			}
-
-			if (evt.type === "tool_execution_end") {
-				if (progress.currentTool) {
-					progress.recentTools.push({
-						tool: progress.currentTool,
-						args: progress.currentToolArgs || "",
-						endMs: now,
-					});
-				}
-				progress.currentTool = undefined;
-				progress.currentToolArgs = undefined;
-				progress.currentToolStartedAt = undefined;
-				progress.currentPath = undefined;
-				fireUpdate();
-			}
-
-			if (evt.type === "message_end" && evt.message) {
-				result.messages.push(evt.message);
-				if (evt.message.role === "assistant") {
-					result.usage.turns++;
-					progress.turnCount = result.usage.turns;
-					const stopReason = (evt.message as { stopReason?: string }).stopReason;
-					const hasToolCall = Array.isArray(evt.message.content)
-						&& evt.message.content.some((part) => (part as { type?: string }).type === "toolCall");
-					const terminalAssistantStop = stopReason === "stop" && !hasToolCall;
-					updateTurnBudget(result.usage.turns, terminalAssistantStop);
-					const u = evt.message.usage;
-					if (u) {
-						result.usage.input += u.input || 0;
-						result.usage.output += u.output || 0;
-						result.usage.cacheRead += u.cacheRead || 0;
-						result.usage.cacheWrite += u.cacheWrite || 0;
-						result.usage.cost += u.cost?.total || 0;
-						progress.tokens = result.usage.input + result.usage.output;
-					}
-					if (!result.model && evt.message.model) result.model = evt.message.model;
-					if (evt.message.errorMessage) assistantError = evt.message.errorMessage;
-					const assistantText = extractTextFromContent(evt.message.content);
-					appendRecentOutput(progress, assistantText.split("\n").slice(-10));
-					// Final assistant message: start the exit drain window.
-					if (terminalAssistantStop) {
-						if (!evt.message.errorMessage && assistantText.trim()) assistantError = undefined;
-						cleanTerminalAssistantStopReceived ||= !evt.message.errorMessage;
-						startFinalDrain();
-					}
-				}
-				updateActivityState(now);
-				fireUpdate();
-			}
-
-			if (evt.type === "tool_result_end" && evt.message) {
-				result.messages.push(evt.message);
-				const resultText = extractTextFromContent(evt.message.content);
-				if (options.toolBudget && pendingToolResult && resultText.includes("Tool budget hard limit reached")) {
-					result.toolBudgetBlocked = true;
-					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, pendingToolResult.tool);
-				}
-				appendRecentOutput(progress, resultText.split("\n").slice(-10));
-				const toolSnapshot = pendingToolResult;
-				pendingToolResult = undefined;
-				if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
-					recordMutatingFailure(mutatingFailures, {
-						tool: toolSnapshot.tool,
-						path: toolSnapshot.path,
-						error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
-						ts: now,
-					}, mutatingFailureWindowMs);
-					if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
-						emitNeedsAttention(now, {
-							message: `${agent.name} needs attention after repeated mutating tool failures`,
-							reason: "tool_failures",
-							currentTool: toolSnapshot.tool,
-							currentPath: toolSnapshot.path,
-							currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
-							recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
-						});
-					}
-				} else if (toolSnapshot?.mutates) {
-					resetMutatingFailureState(mutatingFailures);
-				}
-				fireUpdate();
-			}
-		};
-
-		if (controlConfig.enabled) {
-			activityTimer = setInterval(() => {
-				if (processClosed || settled || detached) return;
-				const now = Date.now();
-				if (updateActivityState(now)) {
-					progress.durationMs = now - startTime;
-					fireUpdate();
-				}
-			}, 1000);
-			activityTimer.unref?.();
-		}
-
-		if (attemptTimeout) {
-			timeoutTimer = setTimeout(() => {
-				if (processClosed || settled || detached || interruptedByControl) return;
-				result.timedOut = true;
-				result.error = attemptTimeout.message;
-				result.finalOutput = attemptTimeout.message;
-				progress.status = "failed";
-				progress.error = attemptTimeout.message;
-				progress.durationMs = Date.now() - startTime;
-				fireUpdate();
-				trySignalChild(proc, "SIGINT");
-				timeoutTerminationTimer = setTimeout(() => {
-					if (processClosed || settled || detached) return;
-					trySignalChild(proc, "SIGTERM");
-				}, 1000);
-				timeoutTerminationTimer.unref?.();
-				timeoutHardKillTimer = setTimeout(() => {
-					if (processClosed || settled || detached) return;
-					trySignalChild(proc, "SIGKILL");
-				}, 4000);
-				timeoutHardKillTimer.unref?.();
-			}, attemptTimeout.remainingMs);
-			timeoutTimer.unref?.();
-		}
-
-		let stderrBuf = "";
-
-		const clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
-		proc.stdout.on("data", (d) => {
-			buf += d.toString();
-			const lines = buf.split("\n");
-			buf = lines.pop() || "";
-			lines.forEach(processLine);
-		});
-		proc.stderr.on("data", (d) => {
-			stderrBuf += d.toString();
-		});
-		proc.on("exit", () => {
-			childExited = true;
-			clearFinalDrainTimers();
-		});
-		proc.on("close", (code, signal) => {
-			clearFinalDrainTimers();
-			clearStdioGuard();
-			void jsonlWriter.close().catch(() => {
-				// JSONL artifact flush is best effort.
-			});
-			cleanupTempDir(tempDir);
-			if (buf.trim()) processLine(buf);
-			if (stderrBuf.trim()) shared.transcriptWriter?.writeStderrText(stderrBuf);
-			if (!result.error && assistantError) result.error = assistantError;
-			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !result.error;
-			if (code !== 0 && stderrBuf.trim() && !result.error && !forcedDrainAfterFinalSuccess) {
-				result.error = stderrBuf.trim();
-			}
-			const finalCode = forcedDrainAfterFinalSuccess ? 0 : forcedTerminationSignal || signal ? (code ?? 1) : (code ?? 0);
-			if (detached) {
-				result.exitCode = result.error && finalCode === 0 ? 1 : finalCode;
-				progress.status = result.exitCode === 0 ? "completed" : "failed";
-				progress.durationMs = Date.now() - startTime;
-				if (result.error) progress.error = result.error;
-				result.progressSummary = {
-					toolCount: progress.toolCount,
-					tokens: progress.tokens,
-					durationMs: progress.durationMs,
-				};
-				let fullOutput = stripAcceptanceReport(getFinalOutput(result.messages));
-				fullOutput = fullOutput.trim() || result.error || result.finalOutput || "Detached child exited without final output.";
-				result.outputMode = options.outputMode ?? "inline";
-				if (options.outputPath && result.exitCode === 0) {
-					const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
-					fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
-					result.savedOutputPath = resolvedOutput.savedPath;
-					result.outputSaveError = resolvedOutput.saveError;
-					if (resolvedOutput.savedPath) {
-						result.outputReference = formatSavedOutputReference(resolvedOutput.savedPath, fullOutput);
-					} else {
-						result.exitCode = 1;
-						result.error = `Output file was not finalized after detached child exit: ${resolvedOutput.saveError ?? options.outputPath}`;
-						progress.status = "failed";
-						progress.error = result.error;
-					}
-				}
-				result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
-					? result.outputReference.message
-					: fullOutput;
-				if (result.artifactPaths && options.artifactConfig?.enabled !== false && options.artifactConfig?.includeOutput !== false) {
-					try {
-						writeArtifact(result.artifactPaths.outputPath, fullOutput);
-					} catch {
-						// Detached children may outlive test/temp cleanup; recovered status is best-effort.
-					}
-				}
-				options.onDetachedExit?.(snapshotResult(result, snapshotProgress(progress)));
-				finish(-2);
-				return;
-			}
-			processClosed = true;
-			finish(finalCode);
-		});
-		proc.on("error", (error) => {
-			clearFinalDrainTimers();
-			clearStdioGuard();
-			void jsonlWriter.close().catch(() => {
-				// JSONL artifact flush is best effort.
-			});
-			cleanupTempDir(tempDir);
-			if (stderrBuf.trim()) shared.transcriptWriter?.writeStderrText(stderrBuf);
-			if (!result.error) {
-				result.error = error instanceof Error ? error.message : String(error);
-			}
-			finish(1);
-		});
-
-		if (options.signal) {
-			const kill = () => {
-				if (processClosed || detached) return;
-				proc.kill("SIGTERM");
-				setTimeout(() => !proc.killed && proc.kill("SIGKILL"), 3000);
-			};
-			if (options.signal.aborted) kill();
-			else {
-				options.signal.addEventListener("abort", kill, { once: true });
-				removeAbortListener = () => options.signal?.removeEventListener("abort", kill);
-			}
-		}
-
-		if (options.interruptSignal) {
-			const interrupt = () => {
-				if (processClosed || detached || settled) return;
-				if (result.timedOut) return;
-				interruptedByControl = true;
-				clearTimeoutTimers();
-				progress.status = "running";
-				progress.durationMs = Date.now() - startTime;
-				result.interrupted = true;
-				result.finalOutput = "Interrupted. Waiting for explicit next action.";
-				progress.activityState = undefined;
-				fireUpdate();
-				trySignalChild(proc, "SIGINT");
-				setTimeout(() => {
-					if (settled || processClosed || detached) return;
-					trySignalChild(proc, "SIGTERM");
-				}, 1000).unref?.();
-			};
-			if (options.interruptSignal.aborted) interrupt();
-			else {
-				options.interruptSignal.addEventListener("abort", interrupt, { once: true });
-				removeInterruptListener = () => options.interruptSignal?.removeEventListener("abort", interrupt);
-			}
-		}
+		// Registrations in the original order.
+		state.unsubscribeIntercomDetach = registerIntercomDetach(state);
+		if (controlConfig.enabled) startActivityTimer(state);
+		if (attemptTimeout) startTimeoutTimer(state);
+		state.clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
+		registerProcessHandlers(state);
+		registerSignalHandlers(state);
 	});
-	result.exitCode = exitCode;
-	if (interruptedByControl) {
-		result.exitCode = 0;
-		result.interrupted = true;
-		result.error = undefined;
-		result.finalOutput = result.finalOutput || "Interrupted. Waiting for explicit next action.";
-		result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
-		progress.activityState = undefined;
-		progress.durationMs = Date.now() - startTime;
-		result.progressSummary = {
-			toolCount: progress.toolCount,
-			tokens: progress.tokens,
-			durationMs: progress.durationMs,
-		};
-		return result;
-	}
-	if (result.detached) {
-		result.exitCode = -2;
-		result.finalOutput = "Detached for intercom coordination before task completion.";
-		result.outputMode = options.outputMode ?? "inline";
-		if (options.outputPath) {
-			result.outputSaveError = "Output file was not finalized because the subagent detached for intercom coordination.";
-		}
-		return result;
-	}
 
-	if (result.error && result.exitCode === 0) {
-		result.exitCode = 1;
-	}
-	if (result.exitCode === 0 && !result.error) {
-		const errInfo = detectSubagentError(result.messages);
-		if (errInfo.hasError) {
-			result.exitCode = errInfo.exitCode ?? 1;
-			result.error = errInfo.details
-				? `${errInfo.errorType} failed (exit ${errInfo.exitCode}): ${errInfo.details}`
-				: `${errInfo.errorType} failed with exit code ${errInfo.exitCode}`;
-		}
-	}
-	if (result.exitCode === 0 && !result.error) {
-		const finalText = getFinalOutput(result.messages);
-		const missingStructuredOutput = options.structuredOutput
-			? !existsSync(options.structuredOutput.outputPath)
-			: false;
-		if (!finalText?.trim() && (!options.structuredOutput || missingStructuredOutput)) {
-			result.exitCode = 1;
-			result.error = "Subagent produced no output (possible model cold-start or empty response).";
-		}
-	}
-	if (options.structuredOutput && result.exitCode === 0 && !result.error) {
-		const structured = readStructuredOutput({
-			schema: options.structuredOutput.schema,
-			schemaPath: options.structuredOutput.schemaPath,
-			outputPath: options.structuredOutput.outputPath,
-		});
-		result.structuredOutputSchemaPath = options.structuredOutput.schemaPath;
-		result.structuredOutputPath = options.structuredOutput.outputPath;
-		if (structured.error) {
-			result.exitCode = 1;
-			result.error = structured.error;
-		} else {
-			result.structuredOutput = structured.value;
-		}
-	}
-
-	progress.status = result.exitCode === 0 ? "completed" : "failed";
-	progress.durationMs = Date.now() - startTime;
-	if (result.error) {
-		progress.error = result.error;
-		if (progress.currentTool) {
-			progress.failedTool = progress.currentTool;
-		}
-	}
-
-	result.progressSummary = {
-		toolCount: progress.toolCount,
-		tokens: progress.tokens,
-		durationMs: progress.durationMs,
-	};
-
-	const acceptanceOutput = getFinalOutput(result.messages);
-	let fullOutput = stripAcceptanceReport(acceptanceOutput);
-	if (result.timedOut) {
-		const timeoutMessage = formatTimeoutMessage(options.timeoutMs ?? 0);
-		fullOutput = fullOutput.trim()
-			? `${timeoutMessage}\n\nPartial output before timeout:\n${fullOutput}`
-			: timeoutMessage;
-	} else if (result.turnBudgetExceeded && result.turnBudget) {
-		fullOutput = formatTurnBudgetOutput(turnBudgetExceededMessage(result.turnBudget, result.turnBudget.turnCount), fullOutput);
-	} else if (result.wrapUpRequested && result.turnBudget?.outcome === "wrap-up-requested") {
-		const note = turnBudgetSoftNote(result.turnBudget, result.turnBudget.wrapUpRequestedAtTurn ?? result.turnBudget.turnCount);
-		fullOutput = fullOutput.trim() ? `${note}\n\n${fullOutput}` : note;
-	}
-	const completionGuard = result.exitCode === 0 && !result.error && agent.completionGuard !== false
-		? evaluateCompletionMutationGuard({
-			agent: agent.name,
-			task: shared.originalTask ?? task,
-			messages: result.messages,
-			tools: agent.tools,
-			mcpDirectTools: agent.mcpDirectTools,
-		})
-		: undefined;
-	if (completionGuard?.triggered && !observedMutationAttempt) {
-		result.exitCode = 1;
-		result.error = "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes.";
-		progress.status = "failed";
-		progress.error = result.error;
-		emitControlEvent(buildControlEvent({
-			from: progress.activityState,
-			to: "needs_attention",
-			runId: options.runId ?? agent.name,
-			agent: agent.name,
-			index: options.index,
-			ts: Date.now(),
-			message: `${agent.name} completed without making edits for an implementation task`,
-			reason: "completion_guard",
-		}));
-	}
-		if (options.outputPath && result.exitCode === 0) {
-			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
-			fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
-			result.savedOutputPath = resolvedOutput.savedPath;
-			result.outputSaveError = resolvedOutput.saveError;
-			if (resolvedOutput.savedPath) {
-				result.outputReference = formatSavedOutputReference(resolvedOutput.savedPath, fullOutput);
-			}
-	}
-		artifactOutputByResult.set(result, fullOutput);
-		acceptanceOutputByResult.set(result, acceptanceOutput);
-	result.outputMode = options.outputMode ?? "inline";
-	result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
-		? result.outputReference.message
-		: fullOutput;
-	result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
-	if (options.onUpdate) {
-		const finalText = result.finalOutput || result.error || "(no output)";
-		const progressSnapshot = snapshotProgress(progress);
-		const resultSnapshot = snapshotResult(result, progressSnapshot);
-		options.onUpdate({
-			content: [{ type: "text", text: finalText }],
-			details: {
-				mode: "single",
-				results: [resultSnapshot],
-				progress: [progressSnapshot],
-				controlEvents: allControlEvents.length ? allControlEvents : undefined,
-			},
-		});
-	}
-	return result;
+	return finalizeSingleAttempt(state, exitCode);
 }
