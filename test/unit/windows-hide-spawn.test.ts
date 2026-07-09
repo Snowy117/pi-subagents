@@ -17,10 +17,10 @@ function assertNestedPiSpawnHidesWindows(sourcePath: string): void {
 
 describe("nested child Pi process visibility", () => {
 	it("hides foreground child Pi process windows on Windows", () => {
-		assertNestedPiSpawnHidesWindows("src/runs/foreground/execution.ts");
+		assertNestedPiSpawnHidesWindows("src/runs/foreground/execution/run-single-attempt.ts");
 	});
 
 	it("hides background child Pi process windows on Windows", () => {
-		assertNestedPiSpawnHidesWindows("src/runs/background/subagent-runner.ts");
+		assertNestedPiSpawnHidesWindows("src/runs/background/runner/run-pi-streaming.ts");
 	});
 });
