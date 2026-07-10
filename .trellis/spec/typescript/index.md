@@ -25,6 +25,7 @@ fits in.
 | [Schema & Type Safety](./schema-and-type-safety.md) | TypeBox runtime schemas, `shared/types.ts`, union types | ✅ Filled |
 | [Testing Guidelines](./testing-guidelines.md) | `node:test` + `assert/strict`, three tiers, injected fakes | ✅ Filled |
 | [Error & I/O Guidelines](./error-and-io-guidelines.md) | Atomic JSON, dependency injection, best-effort catch, errno branching | ✅ Filled |
+| [Cross-Extension Contracts](./cross-extension-contracts.md) | Co-existence with pi-intercom: tool-name collision, cross-protocol handshake, reply-path asymmetry | ✅ Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Required/forbidden patterns, review checklist | ✅ Filled |
 
 Also see the cross-cutting thinking guides in
