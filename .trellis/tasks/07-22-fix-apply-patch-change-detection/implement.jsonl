@@ -1,0 +1,5 @@
+{"file":".trellis/spec/typescript/index.md","reason":"Project TypeScript pre-development checklist and quality gate."}
+{"file":".trellis/spec/typescript/testing-guidelines.md","reason":"Required node:test conventions and deterministic unit-test patterns."}
+{"file":".trellis/spec/typescript/quality-guidelines.md","reason":"Import, shared-helper, and regression-test quality requirements."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Avoid duplicating mutation classification between event tracking and completion guard."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace the shared classifier across foreground, background, and completion layers."}

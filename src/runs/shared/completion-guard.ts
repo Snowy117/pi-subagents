@@ -1,5 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
-import { isMutatingBashCommand } from "./long-running-guard.ts";
+import { isMutatingTool } from "./long-running-guard.ts";
 
 const REVIEW_ONLY_PATTERNS = [
 	/\breview only\b/i,
@@ -159,12 +159,10 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 		if (message.role !== "assistant") continue;
 		for (const part of message.content) {
 			if (part.type !== "toolCall") continue;
-			if (part.name === "edit" || part.name === "write") return true;
-			if (part.name !== "bash") continue;
 			const args = typeof part.arguments === "object" && part.arguments !== null && !Array.isArray(part.arguments)
 				? part.arguments as Record<string, unknown>
 				: {};
-			if (typeof args.command === "string" && isMutatingBashCommand(args.command)) return true;
+			if (isMutatingTool(part.name, args)) return true;
 		}
 	}
 	return false;

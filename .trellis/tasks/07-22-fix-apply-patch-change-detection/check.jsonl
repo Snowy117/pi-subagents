@@ -1,0 +1,5 @@
+{"file":".trellis/spec/typescript/index.md","reason":"Project TypeScript quality check entry point."}
+{"file":".trellis/spec/typescript/testing-guidelines.md","reason":"Unit-test and validation requirements for the regression."}
+{"file":".trellis/spec/typescript/quality-guidelines.md","reason":"Final code review checklist."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Verify no mutation-classification duplication remains."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify shared behavior across all execution paths."}

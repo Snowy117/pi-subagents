@@ -8,6 +8,7 @@ import {
 	expectsImplementationMutation,
 	hasMutationToolCall,
 } from "../../src/runs/shared/completion-guard.ts";
+import { isMutatingTool } from "../../src/runs/shared/long-running-guard.ts";
 
 function assistantToolCall(name: string, args: Record<string, unknown> = {}): Message {
 	return {
@@ -158,6 +159,25 @@ test("worker edit intent covers common docs, config, and source tasks", () => {
 test("edit and write tool calls count as mutation attempts", () => {
 	assert.equal(hasMutationToolCall([assistantToolCall("edit", { path: "a.ts" })]), true);
 	assert.equal(hasMutationToolCall([assistantToolCall("write", { path: "a.ts" })]), true);
+});
+
+test("apply_patch tool calls count as mutation attempts and satisfy implementation guard", () => {
+	const messages = [assistantToolCall("apply_patch", { patch: "*** Begin Patch\n*** End Patch" })];
+
+	assert.equal(isMutatingTool("apply_patch", {}), true);
+	assert.equal(hasMutationToolCall(messages), true);
+	assert.equal(evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: "Implement the approved fix",
+		messages,
+	}).triggered, false);
+});
+
+test("read-only, unknown, and MCP tool calls remain non-mutating", () => {
+	for (const toolName of ["read", "custom_lookup", "github/search"]) {
+		assert.equal(isMutatingTool(toolName, {}), false);
+		assert.equal(hasMutationToolCall([assistantToolCall(toolName)]), false);
+	}
 });
 
 test("obvious mutating bash commands count as mutation attempts", () => {
