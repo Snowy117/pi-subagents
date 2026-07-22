@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
-- **Last Active**: 2026-07-09
+- **Total Sessions**: 2
+- **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~62 | Active |
+| `journal-1.md` | ~95 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-07-22 | 修复 apply_patch 变更检测 | `ecafb0d` | `main` |
 | 1 | 2026-07-09 | Split all oversized TS files to ≤300/≤500 lines via barrel + shared-state extraction | `895598c`, `63f9d4d`, `310206a`, `82ca035`, `278cb6e`, `d03ae93` | `main` |
 <!-- @@@/auto:session-history -->
 
