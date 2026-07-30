@@ -34,6 +34,16 @@ export interface SupervisorRequest {
 	childIndex: number;
 	childTarget?: string;
 	interview?: unknown;
+	replyTransport?: "pi-intercom";
+}
+
+export interface SupervisorAttentionRequest {
+	id: string;
+	runId: string;
+	agent: string;
+	childIndex: number;
+	reason: SupervisorReason;
+	replyTransport?: "pi-intercom";
 }
 
 export interface PendingSupervisorRequest extends SupervisorRequest {

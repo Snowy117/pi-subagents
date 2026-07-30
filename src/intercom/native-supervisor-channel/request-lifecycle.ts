@@ -29,6 +29,7 @@ export function parseRequestFile(file: string, channelDir: string): PendingSuper
 		if (parsed.reason !== "need_decision" && parsed.reason !== "interview_request" && parsed.reason !== "progress_update") return undefined;
 		if (typeof parsed.message !== "string" || !parsed.message) return undefined;
 		if (typeof parsed.runId !== "string" || typeof parsed.agent !== "string" || typeof parsed.childIndex !== "number") return undefined;
+		if (parsed.replyTransport !== undefined && parsed.replyTransport !== "pi-intercom") return undefined;
 		return { ...parsed as SupervisorRequest, channelDir, requestFile: file };
 	} catch {
 		return undefined;

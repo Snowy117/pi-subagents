@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { SupervisorAttentionRequest } from "../../../intercom/native-supervisor-channel/types.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "../async-status.ts";
 import {
 	ASYNC_DIR,
@@ -7,6 +8,7 @@ import {
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_RESULT_INTERCOM_EVENT,
+	INTERCOM_DETACH_REQUEST_EVENT,
 	type Details,
 	type ForegroundResumeRun,
 	type SubagentState,
@@ -56,6 +58,8 @@ export interface WaitDeps {
 	 * events). Omit in tests that want pure poll behavior.
 	 */
 	events?: WaitEventBus;
+	/** Lifecycle-refreshed, read-only source of blocking supervisor requests. */
+	getActionableSupervisorRequests?: () => ReadonlyArray<SupervisorAttentionRequest>;
 }
 
 export { DEFAULT_POLL_INTERVAL_MS, DEFAULT_TIMEOUT_MS, MIN_POLL_INTERVAL_MS };
@@ -66,6 +70,7 @@ const WAKE_CHANNELS = [
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_RESULT_INTERCOM_EVENT,
+	INTERCOM_DETACH_REQUEST_EVENT,
 ];
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -91,7 +96,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
  * turn aborts). Returns when the first of those happens. With no bus this is a
  * plain sleep, so the poll interval alone drives progress.
  */
-export function waitForWake(ms: number, signal: AbortSignal | undefined, deps: WaitDeps): Promise<void> {
+export function waitForWake(ms: number, signal: AbortSignal | undefined, deps: WaitDeps, shouldWake?: () => boolean): Promise<void> {
 	const sleep = deps.sleep ?? defaultSleep;
 	const events = deps.events;
 	if (!events) return sleep(ms, signal);
@@ -117,10 +122,23 @@ export function waitForWake(ms: number, signal: AbortSignal | undefined, deps: W
 		for (const channel of WAKE_CHANNELS) {
 			try { unsubs.push(events.on(channel, done)); } catch { /* ignore bad channel */ }
 		}
+		// Subscribe before reconciling persistent state so a request cannot land
+		// between the caller's initial check and event registration.
+		if (shouldWake?.()) {
+			done();
+			return;
+		}
 		// Poll-interval fallback so we still reconcile even if no event arrives.
 		// The local signal cancels that fallback timer when an event wakes us first.
 		void sleep(ms, wakeController.signal).then(done);
 	});
+}
+
+/** Blocking supervisor requests scoped to the exact runs captured by wait. */
+export function supervisorAttentionForRuns(deps: WaitDeps, initialIds: ReadonlySet<string>): ReadonlyArray<SupervisorAttentionRequest> {
+	return (deps.getActionableSupervisorRequests?.() ?? []).filter((request) =>
+		request.reason !== "progress_update" && initialIds.has(request.runId),
+	);
 }
 
 function matchesId(run: AsyncRunSummary, id: string): boolean {

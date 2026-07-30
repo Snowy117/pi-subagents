@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { SubagentParamsLike } from "../../runs/foreground/subagent-executor.ts";
+import type { SupervisorAttentionRequest } from "../../intercom/native-supervisor-channel/types.ts";
 import { type ResolvedWaitToolConfig, waitForSubagents } from "../../runs/background/wait.ts";
 import { type Details, type ExtensionConfig, type SubagentState } from "../../shared/types.ts";
 import { renderSubagentResult, clearLegacyResultAnimationTimer } from "../../tui/render.ts";
@@ -22,6 +23,7 @@ interface RegisterSubagentToolsOptions {
 	state: SubagentState;
 	events: ExtensionAPI["events"];
 	execute: ExecuteFn;
+	getActionableSupervisorRequests: () => ReadonlyArray<SupervisorAttentionRequest>;
 }
 
 // Drives the inline running-indicator braille animation for foreground subagent
@@ -49,7 +51,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 }
 
 export function registerSubagentTools(pi: ExtensionAPI, options: RegisterSubagentToolsOptions): void {
-	const { config, waitToolConfig, state, events, execute } = options;
+	const { config, waitToolConfig, state, events, execute, getActionableSupervisorRequests } = options;
 
 	function effectiveParallelTaskCount(tasks: Array<{ count?: unknown }> | undefined): number {
 		if (!tasks || tasks.length === 0) return 0;
@@ -125,10 +127,10 @@ Use this after launching async subagents when you have no independent work left 
 • { id: "..." } — wait for one specific run (id or prefix) to finish.
 • { timeoutMs: 600000 } — stop waiting after N ms (the runs keep going regardless; default 30 min)
 
-wait also returns when a run needs attention (a child that went idle or blocked for a decision), not only on completion — so a stuck child never stalls the loop; the summary names the run(s) to inspect/nudge/resume/interrupt. It wakes the instant a completion or control event arrives (subscribed to Pi's event bus, with a poll fallback that reconciles crashed runners), keeps the turn alive for normal notification delivery, and resolves early if the turn is aborted.${waitToolConfig.enabled ? "" : "\n\nConfigured behavior: wait is disabled by config.waitTool or PI_SUBAGENT_WAIT_TOOL_ENABLED and returns immediately without blocking."}`,
+wait also returns when a run needs attention or a blocking supervisor decision/interview request is pending. The summary identifies the run/request and the native or pi-intercom reply path. This mode-independent predicate wakes on completion, control, and supervisor events, with persistent-state reconciliation and a poll fallback; non-blocking progress updates do not terminate wait.${waitToolConfig.enabled ? "" : "\n\nConfigured behavior: wait is disabled by config.waitTool or PI_SUBAGENT_WAIT_TOOL_ENABLED and returns immediately without blocking."}`,
 		parameters: WaitParams,
 		execute(_id, params, signal, _onUpdate, _ctx) {
-			return waitForSubagents(params, signal, { state, events, enabled: waitToolConfig.enabled });
+			return waitForSubagents(params, signal, { state, events, enabled: waitToolConfig.enabled, getActionableSupervisorRequests });
 		},
 	};
 	pi.registerTool(waitTool);

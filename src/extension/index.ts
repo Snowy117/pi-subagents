@@ -155,7 +155,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const { executeSubagentCollapsed, slashBridge, promptTemplateBridge, rpcBridge } = createSubagentBridges(pi.events, state, executor.execute);
 
-	registerSubagentTools(pi, { config, waitToolConfig, state, events: pi.events, execute: executeSubagentCollapsed });
+	registerSubagentTools(pi, {
+		config,
+		waitToolConfig,
+		state,
+		events: pi.events,
+		execute: executeSubagentCollapsed,
+		getActionableSupervisorRequests: supervisorChannel.getActionableRequests,
+	});
 
 	registerSlashCommands(pi, state);
 

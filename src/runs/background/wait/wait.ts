@@ -15,6 +15,7 @@ import {
 	needsAttention,
 	result,
 	summarizeTerminalRuns,
+	supervisorAttentionForRuns,
 	waitForWake,
 } from "./helpers.ts";
 
@@ -68,12 +69,19 @@ export async function waitForSubagents(
 	const initialIds = new Set(active.map((run) => run.id));
 	const initialCount = initialIds.size;
 	let pending = active.filter((run) => !needsAttention(run));
+	let supervisorAttention: ReturnType<typeof supervisorAttentionForRuns>;
+	try {
+		supervisorAttention = supervisorAttentionForRuns(deps, initialIds);
+	} catch (error) {
+		return result(error instanceof Error ? error.message : String(error), true);
+	}
 
-	const done = (active: AsyncRunSummary[], attention: AsyncRunSummary[]): boolean => {
+	const done = (active: AsyncRunSummary[], attention: AsyncRunSummary[], supervisorRequests: ReadonlyArray<unknown>): boolean => {
 		// A run needing attention always breaks the wait, in either mode: the
 		// caller has to act on it (nudge/resume/interrupt) and blocking longer
 		// helps nothing.
 		if (attention.length > 0) return true;
+		if (supervisorRequests.length > 0) return true;
 		if (waitForAll) return active.every((run) => !initialIds.has(run.id));
 		// First-completion: satisfied once any initially-pending run is gone.
 		const stillActiveInitial = active.filter((run) => initialIds.has(run.id));
@@ -82,7 +90,7 @@ export async function waitForSubagents(
 
 	let attention = active.filter((run) => needsAttention(run));
 
-	while (!done(pending, attention)) {
+	while (!done(pending, attention, supervisorAttention)) {
 		if (signal?.aborted) {
 			const stillActive = pending.map((run) => `${run.id} (${run.state})`).join(", ");
 			return result(`Wait aborted after ${formatDuration(now() - startedAt)}. Still active: ${stillActive}.`, true);
@@ -95,11 +103,12 @@ export async function waitForSubagents(
 				true,
 			);
 		}
-		await waitForWake(pollIntervalMs, signal, deps);
 		try {
+			await waitForWake(pollIntervalMs, signal, deps, () => supervisorAttentionForRuns(deps, initialIds).length > 0);
 			active = activeRunsForSession(waitParams, deps);
 			pending = active.filter((run) => !needsAttention(run));
 			attention = attentionRunsForSession(waitParams, deps, initialIds);
+			supervisorAttention = supervisorAttentionForRuns(deps, initialIds);
 		} catch (error) {
 			return result(error instanceof Error ? error.message : String(error), true);
 		}
@@ -121,6 +130,14 @@ export async function waitForSubagents(
 	const attentionNote = attention.length > 0
 		? ` ${attention.length} run(s) need attention: ${attention.map((r) => r.id).join(", ")} — inspect with subagent({ action: "status" }) then nudge/resume/interrupt.`
 		: "";
+	const supervisorAttentionNote = supervisorAttention.length > 0
+		? ` Blocking supervisor request(s): ${supervisorAttention.map((request) => {
+			const route = request.replyTransport === "pi-intercom"
+				? "reply to the queued broker message with intercom({ action: \"reply\", ... })"
+				: `reply with subagent_supervisor({ action: \"reply\", replyTo: \"${request.id}\", message: \"...\" })`;
+			return `${request.id} for ${request.agent} [${request.runId}#${request.childIndex}] (${request.reason}); ${route}`;
+		}).join(" | ")}.`
+		: "";
 
 	const stillRunning = pending.filter((run) => initialIds.has(run.id)).length;
 	const elapsed = formatDuration(now() - startedAt);
@@ -128,28 +145,28 @@ export async function waitForSubagents(
 
 	if (waitForAll) {
 		const scope = params.id ? `run "${params.id}"` : `${initialCount} async run(s)`;
-		const status = attention.length > 0 ? "attention required" : "done";
-		const notificationText = attention.length > 0
+		const status = attention.length > 0 || supervisorAttention.length > 0 ? "attention required" : "done";
+		const notificationText = attention.length > 0 || supervisorAttention.length > 0
 			? "Relevant completion/control events have been observed; inspect status if the notification is not visible yet."
 			: "Completion events have been observed; inspect status if the notification is not visible yet.";
 		return result(
-			`Waited ${elapsed} for ${scope}; ${status}.${outcome}${attentionNote} ${notificationText}`,
+			`Waited ${elapsed} for ${scope}; ${status}.${outcome}${attentionNote}${supervisorAttentionNote} ${notificationText}`,
 		);
 	}
 
 	// First-completion mode.
 	const remainder = stillRunning > 0
 		? ` ${stillRunning} run(s) still in flight — call wait again to catch the next one.`
-		: attention.length > 0
+		: attention.length > 0 || supervisorAttention.length > 0
 			? " No other runs are waitable until attention is handled."
 			: " No runs remain in flight.";
-	const progress = attention.length > 0 && finishedCount === 0
-		? `${attention.length} of ${initialCount} run(s) need attention`
+	const progress = (attention.length > 0 || supervisorAttention.length > 0) && finishedCount === 0
+		? `${new Set([...attention.map((run) => run.id), ...supervisorAttention.map((request) => request.runId)]).size} of ${initialCount} run(s) need attention`
 		: `${finishedCount} of ${initialCount} run(s) finished`;
 	const notificationText = finishedCount > 0
 		? " Completion events for the finished run(s) have been observed; inspect status if the notification is not visible yet."
 		: " Relevant control events have been observed; inspect status if the notification is not visible yet.";
 	return result(
-		`Waited ${elapsed}; ${progress}.${outcome}${attentionNote}${remainder}${notificationText}`,
+		`Waited ${elapsed}; ${progress}.${outcome}${attentionNote}${supervisorAttentionNote}${remainder}${notificationText}`,
 	);
 }

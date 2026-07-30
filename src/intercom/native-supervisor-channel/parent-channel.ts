@@ -11,6 +11,7 @@ import { resolveRunLiveness, wrapSystemMessage } from "../../shared/system-messa
 import type {
 	IntercomParams,
 	PendingSupervisorRequest,
+	SupervisorAttentionRequest,
 	SupervisorReply,
 } from "./types.ts";
 import {
@@ -45,6 +46,10 @@ function requestVisibleText(request: PendingSupervisorRequest): string {
 	return lines.join("\n");
 }
 
+function isNativeReplyRequest(request: PendingSupervisorRequest): boolean {
+	return request.expectsReply && request.replyTransport !== "pi-intercom";
+}
+
 function writeReply(request: PendingSupervisorRequest, message: string): void {
 	if (!message.trim()) throw new Error("message is required for supervisor replies.");
 	const reply: SupervisorReply = {
@@ -60,10 +65,10 @@ function writeReply(request: PendingSupervisorRequest, message: string): void {
 function resolvePendingRequest(pending: Map<string, PendingSupervisorRequest>, params: IntercomParams): PendingSupervisorRequest {
 	if (params.replyTo) {
 		const request = pending.get(params.replyTo);
-		if (!request) throw new Error(`No pending supervisor request found for replyTo '${params.replyTo}'.`);
+		if (!request || !isNativeReplyRequest(request)) throw new Error(`No pending native supervisor request found for replyTo '${params.replyTo}'.`);
 		return request;
 	}
-	const requests = [...pending.values()].filter((request) => request.expectsReply);
+	const requests = [...pending.values()].filter(isNativeReplyRequest);
 	if (params.to) {
 		const normalizedTo = params.to.toLowerCase();
 		const matches = requests.filter((request) =>
@@ -75,12 +80,12 @@ function resolvePendingRequest(pending: Map<string, PendingSupervisorRequest>, p
 		if (matches.length > 1) throw new Error(`Multiple pending supervisor requests match '${params.to}'. Use replyTo.`);
 	}
 	if (requests.length === 1) return requests[0]!;
-	if (requests.length === 0) throw new Error("No pending supervisor requests need a reply.");
+	if (requests.length === 0) throw new Error("No pending native supervisor requests need a reply.");
 	throw new Error("Multiple pending supervisor requests need replies. Use replyTo.");
 }
 
 function publicPendingRequests(pending: Map<string, PendingSupervisorRequest>): Array<Record<string, unknown>> {
-	return [...pending.values()].map((request) => ({
+	return [...pending.values()].filter(isNativeReplyRequest).map((request) => ({
 		id: request.id,
 		runId: request.runId,
 		agent: request.agent,
@@ -102,10 +107,11 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
 			refreshPendingRequests(pending, state, state.lastUiContext ?? undefined);
 			const input = params as IntercomParams;
 			if (input.action === "status") {
-				return { content: [{ type: "text", text: `Native supervisor channel active. Pending replies: ${pending.size}.` }], details: { active: true, pending: pending.size, root: SUPERVISOR_CHANNEL_ROOT } };
+				const pendingCount = [...pending.values()].filter(isNativeReplyRequest).length;
+				return { content: [{ type: "text", text: `Native supervisor channel active. Pending replies: ${pendingCount}.` }], details: { active: true, pending: pendingCount, root: SUPERVISOR_CHANNEL_ROOT } };
 			}
 			if (input.action === "pending" || input.action === "list") {
-				const lines = [...pending.values()].filter((request) => request.expectsReply).map(formatPendingLine);
+				const lines = [...pending.values()].filter(isNativeReplyRequest).map(formatPendingLine);
 				return { content: [{ type: "text", text: lines.length ? lines.join("\n") : "No pending supervisor requests." }], details: { pending: publicPendingRequests(pending) } };
 			}
 			if (input.action === "reply") {
@@ -122,7 +128,11 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
 	};
 }
 
-export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState): { start: () => void; dispose: () => void; pending: Map<string, PendingSupervisorRequest> } {
+export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState): {
+	start: () => void;
+	dispose: () => void;
+	getActionableRequests: () => ReadonlyArray<SupervisorAttentionRequest>;
+} {
 	const pending = new Map<string, PendingSupervisorRequest>();
 	const seenFiles = new Set<string>();
 	let poller: ReturnType<typeof setInterval> | undefined;
@@ -171,7 +181,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 				runLiveness,
 				sentAt: request.createdAt,
 			});
-			pi.sendMessage({
+			if (request.replyTransport !== "pi-intercom") pi.sendMessage({
 				customType: "subagent_supervisor_request",
 				content: wrapped,
 				display: true,
@@ -209,6 +219,18 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			pending.clear();
 			seenFiles.clear();
 		},
-		pending,
+		getActionableRequests: () => {
+			refreshPendingRequests(pending, state, state.lastUiContext ?? undefined);
+			return Object.freeze([...pending.values()]
+				.filter((request) => request.expectsReply)
+				.map(({ id, runId, agent, childIndex, reason, replyTransport }) => Object.freeze({
+					id,
+					runId,
+					agent,
+					childIndex,
+					reason,
+					...(replyTransport ? { replyTransport } : {}),
+				})));
+		},
 	};
 }
