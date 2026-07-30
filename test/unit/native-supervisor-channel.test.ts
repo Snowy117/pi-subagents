@@ -48,7 +48,7 @@ function makeState(sessionId: string | null, ctx: unknown): SubagentState {
 	};
 }
 
-function writeRequest(input: { sessionId: string; runId: string; agent?: string; index?: number; message?: string; createdAt?: number; expiresAt?: number }): string {
+function writeRequest(input: { sessionId: string; runId: string; agent?: string; index?: number; message?: string; createdAt?: number; expiresAt?: number; replyTransport?: "pi-intercom" }): string {
 	const agent = input.agent ?? "worker";
 	const index = input.index ?? 0;
 	const channelDir = resolveSupervisorChannelDir(input.runId, agent, index);
@@ -68,6 +68,7 @@ function writeRequest(input: { sessionId: string; runId: string; agent?: string;
 		runId: input.runId,
 		agent,
 		childIndex: index,
+		...(input.replyTransport ? { replyTransport: input.replyTransport } : {}),
 	}, null, "\t"));
 	return requestId;
 }
@@ -134,11 +135,12 @@ describe("native supervisor channel", () => {
 
 		assert.deepEqual(registeredTools, []);
 		channel.start();
+		assert.deepEqual(channel.getActionableRequests().map((request) => request.id), [matchingId]);
 		channel.dispose();
 
 		assert.deepEqual(registeredTools, [NATIVE_SUPERVISOR_TOOL_NAME, "intercom"]);
 		assert.deepEqual(sent.map((message) => message.details?.id), [matchingId]);
-		assert.equal(channel.pending.has(matchingId), false, "disposed channel clears pending requests");
+		assert.deepEqual(channel.getActionableRequests(), [], "disposed channel clears pending requests");
 		assert.equal(sent.some((message) => message.details?.id === otherId), false);
 	});
 
@@ -237,7 +239,7 @@ describe("native supervisor channel", () => {
 				channel: INTERCOM_DETACH_REQUEST_EVENT,
 				payload: { requestId, runId, agent: "worker", childIndex: 2 },
 			}]);
-			assert.equal(channel.pending.has(requestId), true);
+			assert.equal(channel.getActionableRequests().some((request) => request.id === requestId), true);
 		} finally {
 			channel.dispose();
 		}
@@ -387,17 +389,17 @@ describe("native supervisor channel", () => {
 		try {
 			channel.start();
 			assert.deepEqual(sent.map((message) => message.details?.id), [requestId]);
-			assert.equal(channel.pending.has(requestId), true);
+			assert.equal(channel.getActionableRequests().some((request) => request.id === requestId), true);
 
 			fs.rmSync(requestFile(runId, requestId), { force: true });
 			const pendingResult = await registeredTools.get(NATIVE_SUPERVISOR_TOOL_NAME)!.execute("pending", { action: "pending" });
 
 			assert.match(pendingResult.content[0]!.text, /No pending supervisor requests/);
 			assert.deepEqual(pendingResult.details?.pending, []);
-			assert.equal(channel.pending.has(requestId), false);
+			assert.equal(channel.getActionableRequests().some((request) => request.id === requestId), false);
 			await assert.rejects(
 				() => registeredTools.get(NATIVE_SUPERVISOR_TOOL_NAME)!.execute("reply", { action: "reply", replyTo: requestId, message: "Too late" }),
-				new RegExp(`No pending supervisor request found for replyTo '${requestId}'`),
+				new RegExp(`No pending native supervisor request found for replyTo '${requestId}'`),
 			);
 		} finally {
 			channel.dispose();
@@ -426,7 +428,7 @@ describe("native supervisor channel", () => {
 		controller.abort();
 
 		await assert.rejects(
-			() => registeredTools.get("contact_supervisor")!.execute("contact", { reason: "need_decision", message: "Need a decision" }, controller.signal),
+			async () => registeredTools.get("contact_supervisor")!.execute("contact", { reason: "need_decision", message: "Need a decision" }, controller.signal),
 			/Supervisor request cancelled/,
 		);
 

@@ -73,6 +73,7 @@ function writeShadowContactSupervisorRequest(input: {
 	message?: string;
 	reason?: "need_decision" | "interview_request" | "progress_update";
 	expectsReply?: boolean;
+	replyTransport?: "pi-intercom";
 }): string {
 	const agent = input.agent ?? "worker";
 	const childIndex = input.childIndex ?? 0;
@@ -99,6 +100,7 @@ function writeShadowContactSupervisorRequest(input: {
 		runId: input.runId,
 		agent,
 		childIndex,
+		...(input.replyTransport ? { replyTransport: input.replyTransport } : {}),
 	};
 	fs.writeFileSync(temp, JSON.stringify(payload, null, "\t"));
 	fs.renameSync(temp, target);
@@ -136,7 +138,30 @@ describe("cross-protocol foreground detach (pi-intercom broker → native file b
 			assert.equal(emitted.length, 1);
 			assert.equal(emitted[0]!.channel, INTERCOM_DETACH_REQUEST_EVENT);
 			assert.equal(emitted[0]!.payload.requestId, requestId);
-			assert.equal(channel.pending.has(requestId), true);
+			assert.equal(channel.getActionableRequests().some((request) => request.id === requestId), true);
+		} finally {
+			channel.dispose();
+		}
+	});
+
+	it("uses a broker receipt only as a detach signal", () => {
+		const sessionId = `session-${randomUUID()}`;
+		const runId = `run-${randomUUID()}`;
+		const requestId = writeShadowContactSupervisorRequest({ sessionId, runId, replyTransport: "pi-intercom" });
+		const sent: unknown[] = [];
+		const emitted: Array<{ channel: string }> = [];
+		const pi = {
+			getAllTools: () => [] as Array<{ name: string }>,
+			registerTool: () => {},
+			sendMessage: (message: unknown) => { sent.push(message); },
+			events: { emit: (channel: string) => { emitted.push({ channel }); } },
+		};
+		const channel = createNativeSupervisorChannel(pi as never, makeState(sessionId, makeCtx(sessionId)));
+		channel.start();
+		try {
+			assert.deepEqual(sent, []);
+			assert.equal(emitted.filter((event) => event.channel === INTERCOM_DETACH_REQUEST_EVENT).length, 1);
+			assert.deepEqual(channel.getActionableRequests().find((request) => request.id === requestId)?.replyTransport, "pi-intercom");
 		} finally {
 			channel.dispose();
 		}
@@ -170,7 +195,7 @@ describe("cross-protocol foreground detach (pi-intercom broker → native file b
 		assert.equal(emitted.filter((e) => e.channel === INTERCOM_DETACH_REQUEST_EVENT).length, 0);
 	});
 
-	it("fires detach for a non-blocking progress_update via the file bridge too", () => {
+	it("surfaces a native non-blocking progress_update without firing detach", () => {
 		const sessionId = `session-${randomUUID()}`;
 		const runId = `run-${randomUUID()}`;
 		writeShadowContactSupervisorRequest({
