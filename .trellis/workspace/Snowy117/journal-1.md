@@ -93,3 +93,38 @@ Refactored pi-subagents so every src file is â‰¤300 lines and every test file â‰
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Wake wait on blocking supervisor requests
+
+**Date**: 2026-07-30
+**Task**: Wake wait on blocking supervisor requests
+**Branch**: `main`
+
+### Summary
+
+Implemented event-driven supervisor attention for the pi-subagents wait tool: wait now subscribes to INTERCOM_DETACH_REQUEST_EVENT with subscribe-then-reconcile, queries a read-only lifecycle-refreshed actionable-request source filtered to exact initial run IDs, and returns transport-aware reply instructions. Added the additive replyTransport: pi-intercom discriminator with duplicate-message suppression and native action filtering; pi-intercom now writes native receipts only after broker delivery and cleans them up on all ask-exit paths, with test environment isolation for the bridge variables. Verified via trellis-check: 1000/1000 unit, focused integration green, pi-intercom 36/36; six pre-existing slash-command integration failures reproduced on baseline and are unrelated.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `50cbf65` | (see git log) |
+| `838ecc5` | (see git log) |
+| `f12499c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
