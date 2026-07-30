@@ -1,0 +1,7 @@
+{"file":".trellis/spec/typescript/index.md","reason":"TypeScript quality-check entry point for final review."}
+{"file":".trellis/spec/typescript/testing-guidelines.md","reason":"Verify tier placement, deterministic fakes, integration temp I/O, and complete regression coverage."}
+{"file":".trellis/spec/typescript/error-and-io-guidelines.md","reason":"Audit atomic writes, cleanup failure behavior, environment isolation, and lifecycle races."}
+{"file":".trellis/spec/typescript/quality-guidelines.md","reason":"Final import/style/module-size checklist and LSP/test requirements."}
+{"file":".trellis/spec/typescript/cross-extension-contracts.md","reason":"Check that both repositories implement the same discriminator, authority, duplicate-delivery, and cleanup contract."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace end-to-end producer, file, poller, event, wait, message, reply, and cleanup behavior."}
+{"file":".trellis/tasks/07-23-wait-supervisor-message-delivery/research/integration-contract.md","reason":"Evidence baseline and explicit TUI/RPC versus JSON/print compatibility boundary for acceptance review."}

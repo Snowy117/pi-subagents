@@ -1,0 +1,9 @@
+{"file":".trellis/spec/typescript/index.md","reason":"Entry point and pre-development checklist for all TypeScript changes."}
+{"file":".trellis/spec/typescript/module-and-export-guidelines.md","reason":"Required ESM import, type-only import, and named-export conventions for new wait/channel modules."}
+{"file":".trellis/spec/typescript/schema-and-type-safety.md","reason":"Guidance for the additive native side-channel discriminator and boundary validation."}
+{"file":".trellis/spec/typescript/error-and-io-guidelines.md","reason":"Atomic receipt writes, best-effort cleanup, errno handling, and injectable I/O requirements."}
+{"file":".trellis/spec/typescript/testing-guidelines.md","reason":"RED-first node:test coverage, injected fakes, deterministic unit tests, and temp-I/O integration patterns."}
+{"file":".trellis/spec/typescript/quality-guidelines.md","reason":"File-size placement rules, required tests, and LSP-based TypeScript verification."}
+{"file":".trellis/spec/typescript/cross-extension-contracts.md","reason":"Existing pi-subagents/pi-intercom handshake and reply-authority contract that this task must correct and extend."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Cross-layer data-flow review for request file, event bus, wait tool, and broker lifecycle changes."}
+{"file":".trellis/tasks/07-23-wait-supervisor-message-delivery/research/integration-contract.md","reason":"Current-source evidence, race model, Pi delivery semantics, pi-intercom branch behavior, and mode boundary."}
