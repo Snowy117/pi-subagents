@@ -64,6 +64,8 @@ export interface AsyncChainParams {
 	configToolBudget?: ResolvedToolBudget;
 	/** Global cap on simultaneously-running subagent tasks within the async run. */
 	globalConcurrencyLimit?: number;
+	/** Launch steps as persistent Pi RPC processes (Option B). */
+	persistentChildren?: boolean;
 }
 
 export interface AsyncSingleParams {
@@ -98,6 +100,8 @@ export interface AsyncSingleParams {
 	turnBudget?: ResolvedTurnBudget;
 	toolBudget?: ResolvedToolBudget;
 	configToolBudget?: ResolvedToolBudget;
+	/** Launch the child as a persistent Pi RPC process (Option B). */
+	persistentChildren?: boolean;
 }
 
 export interface AsyncExecutionResult {

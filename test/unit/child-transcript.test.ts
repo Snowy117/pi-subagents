@@ -223,3 +223,55 @@ describe("createChildTranscriptWriter", () => {
 		assert.equal(fs.existsSync(transcriptPath), false);
 	});
 });
+
+describe("createChildTranscriptWriter RPC records", () => {
+	it("tolerates RPC control records without treating them as messages or tools", () => {
+		const dir = tmpDir();
+		const transcriptPath = path.join(dir, "out", "run-rpc_worker_transcript.jsonl");
+		const writer = createChildTranscriptWriter({
+			transcriptPath,
+			source: "foreground",
+			runId: "run-rpc",
+			agent: "worker",
+			cwd: "/repo",
+		});
+		writer.writeChildEvent({ type: "response", command: "prompt", success: true });
+		writer.writeChildEvent({ type: "agent_settled" });
+		writer.writeChildEvent({ type: "extension_ui_request", method: "notify" });
+		writer.writeChildEvent({ type: "queue_update", steering: [], followUp: [] });
+
+		assert.equal(writer.getError(), undefined);
+		const records = readRecords(transcriptPath);
+		assert.equal(records.length, 4);
+		const expectedTypes = ["response", "agent_settled", "extension_ui_request", "queue_update"];
+		for (let i = 0; i < records.length; i++) {
+			const record = records[i]!;
+			assert.equal(record.recordType, "rpc_control");
+			assert.equal(record.sourceEventType, expectedTypes[i]);
+		}
+		assert.equal(records[0]!.sourceEventType, "response");
+		assert.equal(records[1]!.sourceEventType, "agent_settled");
+		assert.equal(records[2]!.sourceEventType, "extension_ui_request");
+		assert.equal(records[3]!.sourceEventType, "queue_update");
+	});
+
+	it("still writes agent events and ignores unknown record types", () => {
+		const dir = tmpDir();
+		const transcriptPath = path.join(dir, "out", "run-rpc2_worker_transcript.jsonl");
+		const writer = createChildTranscriptWriter({
+			transcriptPath,
+			source: "async",
+			runId: "run-rpc2",
+			agent: "worker",
+			cwd: "/repo",
+		});
+		writer.writeChildEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } });
+		writer.writeChildEvent({ type: "totally_unknown_type", someField: 1 });
+
+		assert.equal(writer.getError(), undefined);
+		const records = readRecords(transcriptPath);
+		assert.equal(records.length, 1);
+		assert.equal(records[0]!.recordType, "message");
+		assert.equal(records[0]!.role, "assistant");
+	});
+});

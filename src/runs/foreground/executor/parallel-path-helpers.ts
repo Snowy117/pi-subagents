@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { shouldForkAgent } from "./budget-resolution.ts";
 import { buildParallelWorktreeSuffix } from "./parallel-helpers.ts";
 import { type ExecutionContextData, type ExecutorDeps, type ForegroundParallelRunInput, type TaskParam } from "./types.ts";
+import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 
 
 type ForegroundControl = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
@@ -72,6 +73,7 @@ export function dispatchParallelBackgroundFromClarify(
 		};
 	});
 	return executeAsyncChain(id, {
+		persistentChildren: deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(deps.config).enabled,
 		chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
 		resultMode: "parallel",
 		agents,

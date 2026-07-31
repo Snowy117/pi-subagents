@@ -54,6 +54,10 @@ export interface SubagentRunConfig {
 	toolBudget?: ResolvedToolBudget;
 	/** Global cap on simultaneously-running subagent tasks within this run. */
 	globalConcurrencyLimit?: number;
+	/** Launch steps as persistent Pi RPC processes (Option B). */
+	persistentChildren?: boolean;
+	/** Parent-side registry for resident RPC children. */
+	persistentChildRegistry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry;
 }
 
 export interface StepResult {
@@ -119,6 +123,8 @@ export interface ChildEvent {
 export interface RunPiStreamingResult {
 	stderr: string;
 	exitCode: number | null;
+	/** True when the child remains resident (Option B); the process is parked in the registry. */
+	residentChild?: boolean;
 	messages: Message[];
 	usage: Usage;
 	model?: string;
@@ -165,6 +171,10 @@ export interface SingleStepContext {
 	onAttemptStart?: (attempt: { model?: string; thinking?: string }) => void;
 	onChildEvent?: (event: ChildEvent) => void;
 	skipAcceptance?: () => boolean;
+	/** Launch steps as persistent Pi RPC processes (Option B). */
+	persistentChildren?: boolean;
+	/** Parent-side registry for resident RPC children. */
+	persistentChildRegistry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry;
 }
 
 export type RunnerStatusStep = NonNullable<AsyncStatus["steps"]>[number] & {

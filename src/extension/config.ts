@@ -10,6 +10,37 @@ export function getConfigPath(): string {
 
 export const DEFAULT_TUI_CONFIG: TuiConfig = { openSubagentsOnDown: true };
 
+export interface ResolvedPersistentChildConfig {
+	enabled: boolean;
+	idleEvictionMs: number;
+	maxResidentChildren: number;
+}
+
+export const DEFAULT_PERSISTENT_CHILD_CONFIG: ResolvedPersistentChildConfig = {
+	enabled: true,
+	idleEvictionMs: 15 * 60 * 1000,
+	maxResidentChildren: 4,
+};
+
+export function resolvePersistentChildConfig(config: ExtensionConfig): ResolvedPersistentChildConfig {
+	const raw = config.persistentChildren;
+	const enabled = typeof raw === "object" && raw !== null
+		? raw.enabled !== false
+		: typeof raw === "boolean"
+			? raw
+			: DEFAULT_PERSISTENT_CHILD_CONFIG.enabled;
+	const eviction = typeof raw === "object" && raw !== null ? raw.eviction : undefined;
+	return {
+		enabled,
+		idleEvictionMs: typeof eviction?.idleMs === "number" && eviction.idleMs > 0
+			? eviction.idleMs
+			: DEFAULT_PERSISTENT_CHILD_CONFIG.idleEvictionMs,
+		maxResidentChildren: typeof eviction?.maxResidentChildren === "number" && eviction.maxResidentChildren > 0
+			? eviction.maxResidentChildren
+			: DEFAULT_PERSISTENT_CHILD_CONFIG.maxResidentChildren,
+	};
+}
+
 export function resolveTuiConfig(config: ExtensionConfig): TuiConfig {
 	return {
 		openSubagentsOnDown: typeof config.tui?.openSubagentsOnDown === "boolean"

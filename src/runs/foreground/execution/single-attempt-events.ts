@@ -68,6 +68,14 @@ export function attachEventHandlers(state: SingleAttemptState): void {
 		state.progress.lastActivityAt = now;
 		state.updateActivityState(now);
 
+		if (evt.type === "agent_settled") {
+			// Option B logical completion: the child is done and will stay
+			// resident for further turns. Mark settled and finalize the result
+			// without waiting for process close; eviction closes the process.
+			state.finish(state.processClosed ? 0 : state.result.error ? 1 : 0);
+			return;
+		}
+
 		if (evt.type === "tool_execution_start") {
 			const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
 				? evt.args as Record<string, unknown>

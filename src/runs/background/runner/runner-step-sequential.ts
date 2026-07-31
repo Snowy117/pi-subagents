@@ -53,6 +53,8 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 		childIntercomTarget: state.config.childIntercomTargets?.[flatIndex],
 		orchestratorIntercomTarget: state.config.controlIntercomTarget,
 		nestedRoute: state.config.nestedRoute,
+		persistentChildren: state.config.persistentChildren,
+		persistentChildRegistry: state.config.persistentChildRegistry,
 		registerInterrupt: (interrupt) => ops.registerStepInterrupt(flatIndex, interrupt),
 		registerTimeout: (interrupt) => ops.registerStepTimeout(flatIndex, interrupt),
 		registerTurnBudgetAbort: (abort) => ops.registerStepTurnBudgetAbort(flatIndex, abort),

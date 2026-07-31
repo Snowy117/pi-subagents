@@ -32,6 +32,8 @@ import { actionTargetDir, foregroundControlRoot, foregroundSteerInboxDir } from 
 import { appendTurnBudgetSystemPrompt, initialTurnBudgetState } from "../../shared/turn-budget.ts";
 import { initialToolBudgetState } from "../../shared/tool-budget.ts";
 import { getPiSpawnCommand } from "../../shared/pi-spawn.ts";
+import { attachRpcProtocol } from "../../persistent/rpc-protocol.ts";
+import { createRpcChildCloser } from "../../persistent/rpc-child-registry.ts";
 import {
 	foregroundLiveChildKey,
 	registerForegroundLiveChild,
@@ -88,8 +90,10 @@ export async function runSingleAttempt(
 			options.onDetachedExit?.(detachedResult);
 		},
 	};
+	const persistent = options.persistentChildren === true;
 	const { args, env: sharedEnv, tempDir } = buildPiArgs({
-		baseArgs: ["--mode", "json", "-p"],
+		baseArgs: persistent ? ["--mode", "rpc"] : ["--mode", "json", "-p"],
+		mode: persistent ? "rpc" : "json",
 		task,
 		sessionEnabled: shared.sessionEnabled,
 		sessionDir: options.sessionDir,
@@ -212,6 +216,9 @@ export async function runSingleAttempt(
 	state.result = result;
 	state.progress = progress;
 
+	const registry = options.persistentChildRegistry;
+	const childKey = `${options.runId}/${index}`;
+
 	let exitCode: number;
 	try {
 		exitCode = await new Promise<number>((resolve) => {
@@ -219,7 +226,7 @@ export async function runSingleAttempt(
 			const proc = spawn(spawnSpec.command, spawnSpec.args, {
 				cwd: options.cwd ?? runtimeCwd,
 				env: spawnEnv,
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: persistent ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
 				windowsHide: true,
 			});
 			state.proc = proc;
@@ -239,6 +246,33 @@ export async function runSingleAttempt(
 			state.clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
 			registerProcessHandlers(state);
 			registerSignalHandlers(state);
+
+			if (persistent && registry) {
+				// Option B: own the RPC JSONL write side, deliver the task over stdin,
+				// and register the resident child for later viewer turns. The process
+				// stays alive after agent_settled; eviction is the registry's job.
+				const rpcWrite = attachRpcProtocol(proc).write;
+				state.rpcWrite = rpcWrite;
+				const closed = new Promise<void>((closedResolve) => {
+					proc.once("close", () => closedResolve());
+					proc.once("error", () => closedResolve());
+				});
+				const resident = {
+					key: childKey,
+					sessionFile: options.sessionFile,
+					proc,
+					write: rpcWrite,
+					settled: false,
+					lastActivityAt: Date.now(),
+					pendingDialogs: new Map<string, { resolve: (value: unknown) => void }>(),
+					pendingRequestIds: new Set<string>(),
+					closed,
+					close: async () => {},
+				};
+				resident.close = createRpcChildCloser(resident, {});
+				registry.register(resident);
+				state.rpcWrite.write({ type: "prompt", message: task });
+			}
 		});
 	} catch (error) {
 		removeLiveChild("failed");
@@ -247,7 +281,34 @@ export async function runSingleAttempt(
 
 	try {
 		const finalized = await finalizeSingleAttempt(state, exitCode);
-		if (finalized.detached) return finalized;
+		if (finalized.detached) {
+			// Decided 2026-07-31: a detached child's RPC process is terminated
+			// (abort + graceful shutdown), not handed off; continued conversation
+			// with a detached child is deferred. The registry entry must not leak.
+			if (persistent && registry) {
+				const detached = registry.get(childKey);
+				if (detached) {
+					registry.unregister(childKey);
+					detached.write.write({ type: "abort" });
+					void detached.close("graceful");
+				}
+			}
+			return finalized;
+		}
+		// A successfully settled resident child stays in the registry for later
+		// viewer turns; failed/stopped runs have no conversational future, so
+		// evict them now (abort + graceful close).
+		if (persistent && registry && state.settled && finalized.exitCode === 0 && !finalized.error) {
+			const resident = registry.get(childKey);
+			if (resident) {
+				resident.settled = true;
+				finalized.residentChild = true;
+			}
+		} else if (persistent && registry && state.settled && (finalized.exitCode !== 0 || finalized.error)) {
+			const failed = registry.get(childKey);
+			registry.unregister(childKey);
+			void failed?.close("graceful");
+		}
 		removeLiveChild(finalized.exitCode === 0 && !finalized.error ? "completed" : "failed");
 		return finalized;
 	} catch (error) {

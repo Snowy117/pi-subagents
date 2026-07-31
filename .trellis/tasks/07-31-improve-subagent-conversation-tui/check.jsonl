@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/07-31-improve-subagent-conversation-tui/design.md", "reason": "Option B architecture; check implementation against lifecycle/registry/eviction invariants (R4/R7, AC5/AC9)."}
+{"file": ".trellis/tasks/07-31-improve-subagent-conversation-tui/prd.md", "reason": "Requirements and ACs; verify each phase closes its mapped ACs before task.py start."}
+{"file": ".trellis/tasks/07-31-improve-subagent-conversation-tui/research/pi-rpc-child-command-transport.md", "reason": "Verify RPC protocol usage (LF framing, response correlation, extension_ui_response) matches the implemented transport."}
+{"file": ".trellis/tasks/07-31-improve-subagent-conversation-tui/research/host-editor-routing-feasibility.md", "reason": "Verify input-event handled gating, widget mount/removal, and parent-untouched guarantees in the viewer implementation."}

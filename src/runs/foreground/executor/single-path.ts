@@ -22,6 +22,7 @@ import { createForegroundControlNotifier, formatFailedSingleRunOutput, maybeBuil
 import { resolveSingleRunOutputBaseDir } from "./parallel-helpers.ts";
 import { buildSingleRunSyncOptions, createSingleUpdateForwarder, syncSingleForegroundControlAfterRun } from "./single-path-helpers.ts";
 import { type ExecutionContextData, type ExecutorDeps } from "./types.ts";
+import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 
 
 export async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
@@ -124,6 +125,7 @@ export async function runSinglePath(data: ExecutionContextData, deps: ExecutorDe
 				modelScope: data.modelScope,
 			};
 			return executeAsyncSingle(id, {
+			persistentChildren: deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(deps.config).enabled,
 				agent: params.agent!,
 				task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(task) : task,
 				agentConfig,

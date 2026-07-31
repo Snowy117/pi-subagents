@@ -498,3 +498,133 @@ describe("async execution utilities — background single execution", { skip: !a
 	});
 
 });
+
+describe("async execution — persistent RPC children", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {
+	let tempDir: string;
+	let mockPi: MockPi;
+	before(() => {
+		mockPi = createMockPi();
+		mockPi.install();
+	});
+	after(() => {
+		mockPi.uninstall();
+	});
+	beforeEach(() => {
+		tempDir = createTempDir();
+		mockPi.reset();
+	});
+	afterEach(() => {
+		removeTempDir(tempDir);
+	});
+
+	it("launches async steps with --mode rpc when persistentChildren is set", async () => {
+		mockPi.onCall({ jsonl: [events.assistantMessage("async rpc done")] });
+		const id = `async-rpc-single-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Do RPC work",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-rpc" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+			persistentChildren: true,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, true);
+		assert.equal(payload.state, "complete");
+		assert.equal(payload.exitCode, 0);
+		assert.equal(payload.results[0]?.output, "async rpc done");
+
+		const calls = await waitForMockPiArgs(mockPi, 0);
+		const modeIdx = calls.indexOf("--mode");
+		assert.ok(modeIdx >= 0, "expected --mode in args");
+		assert.equal(calls[modeIdx + 1], "rpc");
+		assert.ok(!calls.some((arg) => arg.startsWith("Task:")), "task must be delivered over stdin in RPC mode");
+		// BLOCKER-1 regression guard: the task text must actually reach the child
+		// over stdin (RPC mode never embeds it in argv).
+		const callFiles = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
+		const lastCall = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFiles.at(-1)!), "utf-8")) as { rpcPrompts?: Array<{ type?: string; message?: string }> };
+		const promptPayload = lastCall.rpcPrompts?.find((entry) => entry.type === "prompt");
+		assert.ok(promptPayload, "expected an RPC prompt record");
+		assert.match(promptPayload.message ?? "", /Do RPC work/, "task text must be sent as the RPC prompt message");
+	});
+
+	it("completes via agent_settled without requiring process exit", async () => {
+		// keepAliveAfterFinalMessageMs proves the mock stays alive; the runner
+		// must still finalize the step when agent_settled arrives.
+		mockPi.onCall({ jsonl: [events.assistantMessage("settled result")], keepAliveAfterFinalMessageMs: 500 });
+		const id = `async-rpc-settled-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Settled work",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-settled" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+			persistentChildren: true,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.state, "complete");
+		assert.equal(payload.results[0]?.output, "settled result");
+	});
+
+	it("fails and evicts the resident child when the settle carries an error", async () => {
+		mockPi.onCall({
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "provider failure" }],
+					model: "mock/test-model",
+					stopReason: "error",
+					errorMessage: "provider transport failed",
+				},
+			}],
+		});
+		const id = `async-rpc-failed-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Failing work",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-failed" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+			persistentChildren: true,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.state, "failed");
+		assert.equal(payload.results[0]?.success, false);
+		assert.equal(payload.results[0]?.error, "provider transport failed");
+	});
+});

@@ -309,3 +309,71 @@ describe("buildPiArgs model wiring", () => {
 	});
 });
 
+
+describe("buildPiArgs RPC mode", () => {
+	it("emits --mode rpc and no -p when mode is rpc", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["--mode", "rpc"],
+			mode: "rpc",
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+		assert.ok(args.includes("--mode"));
+		assert.ok(args.includes("rpc"));
+		assert.ok(!args.includes("-p"));
+	});
+
+	it("omits positional task text in RPC mode (task arrives over stdin)", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["--mode", "rpc"],
+			mode: "rpc",
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+		assert.ok(!args.some((arg) => arg.includes("Task:")));
+		assert.ok(!args.some((arg) => arg.startsWith("@")));
+	});
+
+	it("never emits @file for large tasks in RPC mode", () => {
+		const big = "x".repeat(10_000);
+		const { args } = buildPiArgs({
+			baseArgs: ["--mode", "rpc"],
+			mode: "rpc",
+			task: big,
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+		assert.ok(!args.some((arg) => arg.startsWith("@")));
+		assert.ok(!args.some((arg) => arg.includes("Task:")));
+	});
+
+	it("keeps --session path in RPC mode", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["--mode", "rpc"],
+			mode: "rpc",
+			task: "hello",
+			sessionEnabled: true,
+			sessionFile: "/tmp/subagent-sessions/run-1.jsonl",
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+		assert.ok(args.includes("--session"));
+		assert.ok(args.includes("/tmp/subagent-sessions/run-1.jsonl"));
+	});
+
+	it("legacy json mode still appends the positional task", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["--mode", "json", "-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+		assert.ok(args.some((arg) => arg.includes("Task: hello")));
+	});
+});

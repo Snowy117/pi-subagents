@@ -6,6 +6,8 @@ import { getSubagentDepthEnv, type TurnBudgetState, type Usage } from "../../../
 import { attachPostExitStdioGuard, trySignalChild } from "../../../shared/post-exit-stdio-guard.ts";
 import { extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "../../../shared/utils.ts";
 import { getPiSpawnCommand } from "../../shared/pi-spawn.ts";
+import { attachRpcProtocol } from "../../persistent/rpc-protocol.ts";
+import { createRpcChildCloser } from "../../persistent/rpc-child-registry.ts";
 import { isMutatingTool } from "../../shared/long-running-guard.ts";
 import { appendDiagnosticJsonl, shouldPersistChildEvent } from "./event-logging.ts";
 import { emptyUsage, isTerminalAssistantStop } from "./usage-helpers.ts";
@@ -26,6 +28,9 @@ export function runPiStreaming(
 	registerTimeout?: (interrupt: (() => void) | undefined) => void,
 	timeoutMessage?: string,
 	registerTurnBudgetAbort?: (abort: ((message: string, state?: TurnBudgetState) => void) | undefined) => void,
+	persistent?: boolean,
+	registry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry,
+	task?: string,
 ): Promise<RunPiStreamingResult> {
 	return new Promise((resolve) => {
 		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
@@ -36,7 +41,7 @@ export function runPiStreaming(
 		});
 		const child = spawn(spawnSpec.command, spawnSpec.args, {
 			cwd,
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: persistent ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
 			env: spawnEnv,
 			windowsHide: true,
 		});
@@ -102,6 +107,44 @@ export function runPiStreaming(
 			transcriptWriter?.writeChildEvent(event);
 			onChildEvent?.(event);
 
+			if (event.type === "agent_settled") {
+				// Option B logical completion for the async runner: finalize the
+				// step result here and keep the process resident for viewer turns.
+				if (persistent) {
+					settled = true;
+					clearDrainTimers();
+					const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
+					const finalError = error ?? assistantError;
+					const result: RunPiStreamingResult = {
+						stderr,
+						exitCode: finalError ? 1 : 0,
+						residentChild: !finalError,
+						messages,
+						usage,
+						model,
+						error: finalError,
+						finalOutput,
+						observedMutationAttempt,
+					};
+					// A settled successful child stays resident for viewer turns; a
+					// failed one has no conversational future and is evicted now,
+					// awaiting close so the session file is never double-written.
+					if (registry && residentKey) {
+						const resident = registry.get(residentKey);
+						if (resident) {
+							resident.settled = !finalError;
+							if (finalError) {
+								registry.unregister(residentKey);
+								void resident.close("graceful").catch(() => {}).then(() => finishResolve(result));
+								return;
+							}
+						}
+					}
+					finishResolve(result);
+				}
+				return;
+			}
+
 			if (event.type === "tool_execution_start" && event.toolName) {
 				observedMutationAttempt = observedMutationAttempt || isMutatingTool(event.toolName, event.args);
 				const toolArgs = extractToolArgsPreview(event.args ?? {});
@@ -161,7 +204,22 @@ export function runPiStreaming(
 		let turnBudgetTerminationTimer: NodeJS.Timeout | undefined;
 		let turnBudgetHardKillTimer: NodeJS.Timeout | undefined;
 		let settled = false;
+		// RPC mode: agent_settled resolves the run while the process stays
+		// resident; the close handler must not double-resolve.
+		let runResolved = false;
+		let residentKey: string | undefined;
 		const clearStdioGuard = attachPostExitStdioGuard(child, { idleMs: 2000, hardMs: 8000 });
+
+		const finishResolve = (result: RunPiStreamingResult): void => {
+			if (runResolved) return;
+			runResolved = true;
+			registerInterrupt?.(undefined);
+			registerTimeout?.(undefined);
+			registerTurnBudgetAbort?.(undefined);
+			clearDrainTimers();
+			clearStdioGuard();
+			resolve(result);
+		};
 		child.stdout.on("data", (chunk: Buffer) => {
 			const text = chunk.toString();
 			stdoutBuf += text;
@@ -234,6 +292,10 @@ export function runPiStreaming(
 		};
 		function startFinalDrain(): void {
 			if (childExited || finalDrainTimer || settled) return;
+			// RPC mode: a terminal assistant stop is not a kill signal; the child
+			// stays resident and agent_settled arrives (possibly after retry/
+			// compaction). Only the json one-shot path drains.
+			if (persistent) return;
 			finalDrainTimer = setTimeout(() => {
 				if (settled) return;
 				const termSent = trySignalChild(child, "SIGTERM");
@@ -267,7 +329,7 @@ export function runPiStreaming(
 			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
 			const finalError = error ?? assistantError;
 			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !finalError;
-			resolve({
+			finishResolve({
 				stderr,
 				exitCode: timedOut ? 1 : turnBudgetExceeded ? 1 : interrupted || forcedDrainAfterFinalSuccess ? 0 : forcedTerminationSignal || signal ? (exitCode ?? 1) : exitCode,
 				messages,
@@ -286,15 +348,36 @@ export function runPiStreaming(
 
 		child.on("error", (spawnError) => {
 			settled = true;
-			registerInterrupt?.(undefined);
-			registerTimeout?.(undefined);
-			registerTurnBudgetAbort?.(undefined);
-			clearDrainTimers();
-			clearStdioGuard();
-			outputStream.end();
 			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
 			const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);
-			resolve({ stderr, exitCode: 1, messages, usage, model, error: timedOut ? (timeoutMessage ?? "Subagent timed out.") : turnBudgetExceeded ? turnBudgetMessage : error ?? assistantError ?? spawnErrorMessage, finalOutput: timedOut && !finalOutput.trim() ? (timeoutMessage ?? "Subagent timed out.") : finalOutput, timedOut, turnBudget, turnBudgetExceeded, wrapUpRequested: turnBudget?.outcome === "wrap-up-requested" || turnBudgetExceeded || undefined, observedMutationAttempt });
+			finishResolve({ stderr, exitCode: 1, messages, usage, model, error: timedOut ? (timeoutMessage ?? "Subagent timed out.") : turnBudgetExceeded ? turnBudgetMessage : error ?? assistantError ?? spawnErrorMessage, finalOutput: timedOut && !finalOutput.trim() ? (timeoutMessage ?? "Subagent timed out.") : finalOutput, timedOut, turnBudget, turnBudgetExceeded, wrapUpRequested: turnBudget?.outcome === "wrap-up-requested" || turnBudgetExceeded || undefined, observedMutationAttempt });
 		});
+
+		if (persistent && registry) {
+			// Option B async: deliver the task over stdin and park the resident
+			// child for later viewer turns. Eviction is the registry's job. The
+			// task text is passed explicitly (RPC mode never embeds it in argv).
+			const rpcWrite = attachRpcProtocol(child).write;
+			const closed = new Promise<void>((closedResolve) => {
+				child.once("close", () => closedResolve());
+				child.once("error", () => closedResolve());
+			});
+			const resident = {
+				key: childEventContext ? `${childEventContext.runId}/${childEventContext.stepIndex}` : `async/${Date.now()}`,
+				sessionFile: undefined,
+				proc: child,
+				write: rpcWrite,
+				settled: false,
+				lastActivityAt: Date.now(),
+				pendingDialogs: new Map<string, { resolve: (value: unknown) => void }>(),
+				pendingRequestIds: new Set<string>(),
+				closed,
+				close: async () => {},
+			};
+			resident.close = createRpcChildCloser(resident, {});
+			registry.register(resident);
+			residentKey = resident.key;
+			rpcWrite.write({ type: "prompt", message: task ?? "" });
+		}
 	});
 }

@@ -17,6 +17,7 @@ import { rememberForegroundRun, updateRememberedForegroundChild } from "./foregr
 import { collectChainSessionFiles, collectChainThinkingOverrides, wrapChainTasksForFork } from "./fork-helpers.ts";
 import { createForegroundControlNotifier, maybeBuildForegroundIntercomReceipt } from "./intercom-result.ts";
 import { type ExecutionContextData, type ExecutorDeps } from "./types.ts";
+import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 
 
 export async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
@@ -112,6 +113,7 @@ export async function runChainPath(data: ExecutionContextData, deps: ExecutorDep
 		};
 		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, contextPolicy);
 		return executeAsyncChain(id, {
+			persistentChildren: deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(deps.config).enabled,
 			chain: asyncChain,
 			task: params.task,
 			agents,

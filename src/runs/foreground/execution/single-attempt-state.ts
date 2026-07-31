@@ -89,11 +89,14 @@ export interface SingleAttemptState {
 	progress: AgentProgress;
 
 	// ---- spawn process (assigned in executor) ----
-	// `spawn` is always called with stdio `["ignore", "pipe", "pipe"]`, so stdin is
+	// json mode spawns with stdio `["ignore", "pipe", "pipe"]`, so stdin is
 	// null and stdout/stderr are non-null `Readable` (matching the original).
-	proc: ChildProcessByStdio<null, Readable, Readable>;
+	// RPC mode spawns with `["pipe", "pipe", "pipe"]` and owns stdin.
+	proc: ChildProcessByStdio<null | NodeJS.WritableStream, Readable, Readable>;
 	jsonlWriter: ReturnType<typeof createJsonlWriter>;
 	resolve: (code: number) => void;
+	/** Non-null in RPC mode: the LF-only JSONL writer bound to child stdin. */
+	rpcWrite: import("../../persistent/rpc-protocol.ts").RpcWrite | undefined;
 
 	// ---- buffers ----
 	buf: string;
@@ -186,9 +189,10 @@ export function createSingleAttemptState(input: SingleAttemptInputs): SingleAtte
 		// onto the state object so all handlers mutate the same references.
 		result: undefined as unknown as SingleResult,
 		progress: undefined as unknown as AgentProgress,
-		proc: undefined as unknown as ChildProcessByStdio<null, Readable, Readable>,
+		proc: undefined as unknown as ChildProcessByStdio<null | NodeJS.WritableStream, Readable, Readable>,
 		jsonlWriter: undefined as unknown as ReturnType<typeof createJsonlWriter>,
 		resolve: (() => undefined) as (code: number) => void,
+		rpcWrite: undefined,
 
 		buf: "",
 		stderrBuf: "",

@@ -10,7 +10,7 @@ import { THINKING_LEVELS } from "../../shared/model-info.ts";
 import { TOOL_BUDGET_ENV, encodeToolBudgetEnv } from "./tool-budget.ts";
 
 const TASK_ARG_LIMIT = 8000;
-const PROMPT_RUNTIME_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-prompt-runtime.ts");
+export const PROMPT_RUNTIME_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-prompt-runtime.ts");
 const FANOUT_CHILD_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "extension", "fanout-child.ts");
 export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
 export const SUBAGENT_ORCHESTRATOR_TARGET_ENV = "PI_SUBAGENT_ORCHESTRATOR_TARGET";
@@ -35,6 +35,8 @@ export const SUBAGENT_ACTION_CONTROL_DIR_ENV = "PI_SUBAGENT_ACTION_CONTROL_DIR";
 interface BuildPiArgsInput {
 	parentSessionId?: string;
 	baseArgs: string[];
+	/** Child launch mode; RPC children stay resident and receive the task over stdin. Defaults to "json" (legacy one-shot). */
+	mode?: "json" | "rpc";
 	task: string;
 	sessionEnabled: boolean;
 	sessionDir?: string;
@@ -167,15 +169,19 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		args.push(input.systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt", promptPath);
 	}
 
-	if (input.task.length > TASK_ARG_LIMIT) {
-		if (!tempDir) {
-			tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+	// RPC mode receives the task over stdin after spawn; RPC rejects @file
+	// args and ignores CLI positional messages, so no task text is appended.
+	if (input.mode !== "rpc") {
+		if (input.task.length > TASK_ARG_LIMIT) {
+			if (!tempDir) {
+				tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+			}
+			const taskFilePath = path.join(tempDir, "task.md");
+			fs.writeFileSync(taskFilePath, `Task: ${input.task}`, { mode: 0o600 });
+			args.push(`@${taskFilePath}`);
+		} else {
+			args.push(`Task: ${input.task}`);
 		}
-		const taskFilePath = path.join(tempDir, "task.md");
-		fs.writeFileSync(taskFilePath, `Task: ${input.task}`, { mode: 0o600 });
-		args.push(`@${taskFilePath}`);
-	} else {
-		args.push(`Task: ${input.task}`);
 	}
 
 	const env: Record<string, string | undefined> = {};

@@ -268,3 +268,140 @@ const response = consumeControlActionResponses(child.actionControlDir)
 ```
 
 **Language**: All documentation is written in **English**.
+
+---
+
+## Persistent RPC execution children (Option B)
+
+### Scope / Trigger
+
+Every foreground and async execution child can launch as a persistent Pi RPC
+process (`--mode rpc`, stdin piped) instead of the legacy one-shot
+`--mode json -p`. Logical completion is `agent_settled`; the process stays
+resident for direct conversation until evicted. Modules:
+`src/runs/persistent/{rpc-protocol,rpc-child-registry}.ts`,
+`src/runs/foreground/execution/*`, `src/runs/background/runner/*`,
+`src/tui/steer-view/{host-editor-mode,reopen-bridge}.ts`,
+`src/extension/index.ts`, `src/extension/config.ts`.
+
+### Signatures
+
+```ts
+// pi-args
+buildPiArgs({ mode?: "json" | "rpc" });           // rpc: --mode rpc, no -p, no positional task, no @file
+// rpc-protocol
+attachRpcProtocol(child): { write: RpcWrite; reader: RpcLineReader };
+// rpc-child-registry
+createRpcChildRegistry(): RpcChildRegistry;       // get/has/register/unregister/evictIdle/evictOverflow/closeAll
+createRpcChildCloser(child, deps): (kind: "graceful" | "force") => Promise<void>;
+// config
+resolvePersistentChildConfig(config): ResolvedPersistentChildConfig;  // {enabled, idleEvictionMs, maxResidentChildren}
+// host-editor mode
+createHostEditorConversation({ getResidentChild }): HostEditorConversationHandle;
+// reopen bridge
+createReopenBridge({ registry, getChildLaunchArgs, cwd }): ReopenBridge;
+```
+
+### Contracts
+
+- RPC framing is strict LF-only JSONL on child stdin/stdout. Never use Node
+  `readline` (it splits on U+2028/U+2029). Reader caps single records at
+  16 MiB and emits an empty line as a placeholder.
+- Backpressure: a false return from `stdin.write()` means the chunk was
+  accepted into the stream's internal buffer; only subsequent lines queue
+  until `drain` (single persistent drain listener — `once` per write
+  double-flushes).
+- Task delivery: RPC mode sends `prompt` over stdin after spawn; `@file` and
+  positional `Task:` text are never used (Pi RPC rejects `@file`, ignores
+  CLI positional messages).
+- Completion: `agent_settled` → logical completion → finalize result without
+  closing the process. `startFinalDrain` is disabled in RPC mode. Failed
+  runs (timeout/budget/interrupt/error) are evicted (unregister + graceful
+  close) — they have no conversational future.
+- Registry invariants: one entry per child key; re-register replaces the
+  handle (callers check `has()` first); evictIdle only touches settled
+  children; evictOverflow evicts least-recently-active settled first, never
+  an active/streaming one.
+- Graceful close: cancel pending dialogs → stdin EOF (Pi persists session) →
+  bounded grace → SIGTERM → SIGKILL. Force close skips EOF.
+- Host-editor routing: `pi.on("input")` returns `{action:"handled"}` only
+  while child mode is active; `!bash` and single `/` return `"continue"`
+  (parent-owned). `//name` → RPC `prompt: "/name args"`. Unknown `//name`
+  must not fall through to a child LLM prompt.
+- Session files: the RPC child is the sole writer. The parent never opens a
+  child session via `SessionManager.open`. Reopen bridge is guarded by the
+  registry (never a second writer).
+- Async children live in a separate runner process; their RPC registry lives
+  in that process and is closed gracefully before the runner exits.
+
+### Validation & Error Matrix
+
+| Case | Behavior |
+| --- | --- |
+| RPC child crashes while host-editor mode active | Mode auto-closes, widget removed, input returns to parent; session file intact |
+| `agent_settled` never arrives | Timeout/budget/interrupt paths terminate the process (failed run) |
+| Reopen while resident entry exists | Returns existing entry; never spawns a second writer |
+| `--no-session` child | `residentChild` continuity unavailable; viewer falls back to read-only/steer |
+| `persistentChildren: false` | Legacy one-shot json launch unchanged; tests exercise both paths |
+
+### Tests Required
+
+- `test/unit/rpc-protocol.test.ts` — LF-only splitting (U+2028), CRLF strip,
+  fragmentation, >16MiB drop, backpressure queue/flush.
+- `test/unit/rpc-child-registry.test.ts` — one-writer, idle/overflow eviction,
+  graceful vs force close.
+- `test/unit/host-editor-mode.test.ts` — routing matrix (ordinary/`//name`/
+  single `/`/`!bash`), close stops routing.
+- `test/unit/reopen-bridge.test.ts` — fresh reopen, one-writer guard, no-file.
+- `test/integration/foreground-rpc-child.test.ts` + async RPC tests — settle
+  → resident → evict; `--mode rpc` arg; task-over-stdin.
+
+### Wrong vs Correct
+
+#### Wrong
+
+```ts
+// readline splits on U+2028 — corrupts records.
+readline.createInterface({ input: child.stdout });
+
+// Buffering the backpressured chunk again double-writes it.
+if (!stdin.write(chunk)) { queue.push(chunk); }
+
+// Killing the settled child loses the session persist handshake.
+trySignalChild(proc, "SIGKILL"); // on successful agent_settled
+
+// Parent writes the child's session file (second writer).
+SessionManager.open(childSessionFile).appendMessage(msg);
+```
+
+#### Correct
+
+```ts
+// LF-only JSONL writer with drain backpressure.
+rpcWrite.write({ type: "prompt", message: text, streamingBehavior });
+
+// Settle = logical completion; process stays resident; eviction closes it.
+if (event.type === "agent_settled") state.finish(0);
+
+// Graceful close persists the session (stdin EOF → Pi shutdown).
+await resident.close("graceful");
+
+// Parent never writes child sessions; reopen is registry-guarded.
+if (!registry.has(key)) registry.register(reopen(target));
+```
+
+### Viewer-activity eviction and target switch
+
+- `evictIdle(idleMs, { except })` and `evictOverflow(max, { except })` skip the
+  excluded key; the extension eviction loop passes the active host-editor
+  target's resident key so the child being conversed with is never evicted.
+- `hostEditorConversation.routeInput` refreshes `resident.lastActivityAt` on
+  every routed input.
+- Selecting a new child while host-editor mode is active closes the old
+  conversation first (`showChat`), then opens the new target; re-selecting the
+  active target is a no-op. `open()` is re-entrant (second `/subagents`
+  reopens the picker).
+- `refreshCommands` binds the pending get_commands refresh to the requesting
+  resident key; a stale refresh resolving after a target switch never writes
+  one child's command set into the active child's cache. Timeout/no-stdout
+  results are not cached (a later `//name` re-requests).

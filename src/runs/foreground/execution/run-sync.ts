@@ -273,6 +273,6 @@ export async function runSync(
 		}
 	}
 
-	if (!result.detached) markLiveTranscriptTerminal(transcriptWriter?.path);
+	if (!result.detached && !result.residentChild) markLiveTranscriptTerminal(transcriptWriter?.path);
 	return result;
 }

@@ -77,6 +77,8 @@ export interface ExecutorDeps {
 	state: SubagentState;
 	config: ExtensionConfig;
 	asyncByDefault: boolean;
+	/** Parent-side registry for resident RPC children (Option B); created per extension activation. */
+	persistentChildRegistry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry;
 	handleScheduledRunAction?: (params: SubagentParamsLike, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>;
 	tempArtifactsDir: string;
 	getSubagentSessionRoot: (parentSessionFile: string | null) => string;

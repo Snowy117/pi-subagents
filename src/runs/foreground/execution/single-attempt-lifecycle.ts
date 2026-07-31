@@ -58,6 +58,10 @@ export function attachLifecycleHandlers(state: SingleAttemptState): void {
 
 	state.startFinalDrain = () => {
 		if (state.childExited || state.finalDrainTimer || state.settled || state.processClosed || state.detached) return;
+		// Option B: the child is a resident RPC process; a terminal assistant
+		// stop is not a signal to kill it — agent_settled will arrive and the
+		// viewer may keep conversing. Only the json one-shot path drains.
+		if (state.rpcWrite) return;
 		state.finalDrainTimer = setTimeout(() => {
 			if (state.settled || state.processClosed || state.detached) return;
 			const termSent = trySignalChild(state.proc, "SIGTERM");

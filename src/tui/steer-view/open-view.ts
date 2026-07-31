@@ -16,6 +16,10 @@ export interface SteerViewController {
 export interface SteerViewControllerOptions extends ListSteerViewTargetsOptions {
 	isStaleContextError?: (error: unknown) => boolean;
 	trustedRoots?: (ctx: ExtensionContext) => string[];
+	/** Optional host-editor routing mode; when a resident child exists the picker
+	 *  activates it instead of the full-screen overlay chat. */
+	hostEditor?: import("./host-editor-mode.ts").HostEditorConversationHandle;
+	getResidentChild?: (target: SteerViewTarget) => import("../../runs/persistent/rpc-child-registry.ts").PersistentRpcChild | undefined;
 }
 
 const FULL_OVERLAY = { anchor: "center" as const, width: "100%" as const, maxHeight: "100%" as const, margin: 0 };
@@ -29,7 +33,7 @@ export function createSteerViewController(
 	let cancelEpoch = 0;
 	let closeCurrent: (() => void) | undefined;
 	const showPicker = async (ctx: ExtensionContext): Promise<SteerViewTarget | undefined> => {
-		const targets = listSteerViewTargets(_state, options).filter((target) => target.active);
+		const targets = listSteerViewTargets(_state, options).filter((target) => target.active || (options.getResidentChild?.(target) !== undefined));
 		if (targets.length === 0) {
 			ctx.ui.notify("No active subagent children to view.", "info");
 			return undefined;
@@ -46,8 +50,28 @@ export function createSteerViewController(
 		...target,
 		trustedRoots: [...new Set([...(target.trustedRoots ?? []), ...(options.trustedRoots?.(ctx) ?? [])])],
 	});
-	const showChat = async (ctx: ExtensionContext, target: SteerViewTarget): Promise<SteerViewResult> =>
-		ctx.ui.custom<SteerViewResult>(
+	const showChat = async (ctx: ExtensionContext, target: SteerViewTarget): Promise<SteerViewResult> => {
+		// Host-editor routing mode: when the selected child has a resident RPC
+		// process (Option B), keep the real editor and route submissions to the
+		// child; the widget shows the transcript above the editor. Activation
+		// happens synchronously; open() observes hostEditor.active and exits.
+		if (options.hostEditor && options.getResidentChild) {
+			// Re-selecting the active target is a no-op for host-editor mode.
+			if (options.hostEditor.active && options.hostEditor.targetKey === target.key) {
+				return { kind: "picker" };
+			}
+			// Switching target while host-editor mode is active: close the old
+			// conversation first so the new selection routes to the new child.
+			if (options.hostEditor.active && options.hostEditor.targetKey !== target.key) {
+				options.hostEditor.close(ctx);
+			}
+			const resident = options.getResidentChild(target);
+			if (options.hostEditor.open(ctx, target, resident)) {
+				ctx.ui.notify(`Conversation routed to ${target.agent} (child mode). Use /subagents exit to return.`, "info");
+				return { kind: "picker" };
+			}
+		}
+		return ctx.ui.custom<SteerViewResult>(
 			(tui: TUI, theme: Theme, _kb, done) => {
 				const component = new SteerViewComponent(tui, theme, withTrustedRoots(ctx, target), done, {
 					refreshTarget: () => {
@@ -60,6 +84,7 @@ export function createSteerViewController(
 			},
 			{ overlay: true, overlayOptions: FULL_OVERLAY },
 		);
+	};
 	return {
 		get modalOpen() { return modalOpen; },
 		async open(ctx: ExtensionContext): Promise<void> {
@@ -71,6 +96,11 @@ export function createSteerViewController(
 				while (target && !disposed && openEpoch === cancelEpoch) {
 					const result = await showChat(ctx, target);
 					if (openEpoch !== cancelEpoch) return;
+					// Host-editor mode stays active after picker selection; the loop
+					// exits and the input handler routes submissions until exit.
+					if (options.hostEditor?.active) {
+						return;
+					}
 					if (result.kind === "slash") {
 						ctx.ui.setEditorText(result.text);
 						return;

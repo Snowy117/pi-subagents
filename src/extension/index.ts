@@ -20,6 +20,7 @@ import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
 import { renderWidget } from "../tui/render.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import { createRpcChildRegistry } from "../runs/persistent/rpc-child-registry.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
@@ -28,8 +29,8 @@ import { registerSlashCommands } from "../slash/slash-commands.ts";
 import { clearSlashSnapshots, restoreSlashFinalSnapshots } from "../slash/slash-live-state.ts";
 import { resolveWaitToolConfig } from "../runs/background/wait.ts";
 import registerSubagentNotify from "../runs/background/notify.ts";
-import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/pi-args.ts";
-import { loadConfig } from "./config.ts";
+import { PROMPT_RUNTIME_EXTENSION_PATH, SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/pi-args.ts";
+import { loadConfig, resolvePersistentChildConfig } from "./config.ts";
 import {
 	clearPendingForegroundControlNotices,
 	handleSubagentControlNotice,
@@ -51,6 +52,8 @@ import { registerSubagentTools } from "./registration/tools.ts";
 import { createSubagentBridges } from "./registration/bridges.ts";
 import { ensureAccessibleDir, expandTilde, getSubagentSessionRoot, isStaleExtensionContextError } from "./registration/session-paths.ts";
 import { createSteerViewRuntime } from "../tui/steer-view/registration.ts";
+import { createHostEditorConversation } from "../tui/steer-view/host-editor-mode.ts";
+import { createReopenBridge } from "../tui/steer-view/reopen-bridge.ts";
 
 export { loadConfig } from "./config.ts";
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
@@ -73,6 +76,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	cleanupOldChainDirs();
 
 	const config = loadConfig();
+	// Product default: persistent RPC children are enabled unless the user
+	// explicitly disables them. Tests that build an executor from a bare
+	// `config: {}` keep the legacy json path because the field is absent there.
+	// The E2E harness sets PI_SUBAGENT_E2E_JSON_CHILD to exercise the json path.
+	if (config.persistentChildren === undefined && process.env.PI_SUBAGENT_E2E_JSON_CHILD !== "1") {
+		config.persistentChildren = { enabled: true };
+	}
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
@@ -100,7 +110,63 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			clear: () => {},
 		},
 	};
-	const steerView = createSteerViewRuntime(state, config);
+	const persistentChildRegistry = createRpcChildRegistry();
+	const reopenBridge = createReopenBridge({
+		registry: persistentChildRegistry,
+		cwd: state.baseCwd || process.cwd(),
+		getChildLaunchArgs: (target) => {
+			// Rebuild a minimal RPC child for the persisted session. The
+			// subagent-prompt-runtime extension is loaded so steer/control and
+			// child runtime features work; original per-child flags (tools,
+			// skills, extra extensions) are not retained post-eviction, so
+			// child commands like DCP are only available if the child's own
+			// configuration loads them.
+			if (!target.sessionFile) return undefined;
+			return ["--mode", "rpc", "--session", target.sessionFile, "--extension", PROMPT_RUNTIME_EXTENSION_PATH];
+		},
+	});
+	const getResidentChild = (target: import("./tui/steer-view/target-model.ts").SteerViewTarget) => {
+		// target.key is "kind:runId:index"; the foreground registry is keyed
+		// "runId/index". Async children live in the runner process and are
+		// resolved via a cross-process bridge (Phase 5), not here.
+		const [kind, runId, indexText] = target.key.split(":");
+		if (kind !== "foreground" || !runId || !indexText) return undefined;
+		const key = `${runId}/${indexText}`;
+		const existing = persistentChildRegistry.get(key);
+		if (existing) return existing;
+		// Reopen an evicted settled child's session when it has a persisted
+		// session file; the registry guard prevents concurrent writers.
+		return reopenBridge.reopen(target);
+	};
+	const hostEditorConversation = createHostEditorConversation({
+		getResidentChild,
+	});
+
+	// Option B eviction loop: settle idle resident children and enforce the
+	// resident cap. Runs every minute; config changes take effect on next tick.
+	const evictionTimer = setInterval(() => {
+		// Re-read config each tick so idle/cap changes take effect without a
+		// parent restart (config file is reloaded by loadConfig below).
+		const current = resolvePersistentChildConfig(loadConfig());
+		if (current.enabled) {
+			// Never evict the child the user is actively conversing with.
+			const activeKey = hostEditorConversation.active ? hostEditorConversation.targetKey : undefined;
+			const activeResidentKey = activeKey ? activeKey.split(":").slice(1).join("/") : undefined;
+			void persistentChildRegistry.evictIdle(current.idleEvictionMs, { except: activeResidentKey });
+			void persistentChildRegistry.evictOverflow(current.maxResidentChildren, { except: activeResidentKey });
+		}
+	}, 60_000);
+	evictionTimer.unref?.();
+	const steerView = createSteerViewRuntime(state, config, {
+		hostEditor: hostEditorConversation,
+		getResidentChild,
+	});
+
+	const unregisterInputHandler = pi.on("input", (event) => {
+		if (!hostEditorConversation.active) return { action: "continue" as const };
+		return hostEditorConversation.routeInput(event);
+	});
+	void unregisterInputHandler;
 
 	const supervisorChannel = createNativeSupervisorChannel(pi, state);
 	const { startResultWatcher, primeExistingResults, stopResultWatcher } = createResultWatcher(
@@ -122,6 +188,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			state.poller = null;
 		}
 		steerView.dispose();
+		hostEditorConversation.dispose();
+		clearInterval(evictionTimer);
 	};
 	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
@@ -145,6 +213,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state,
 		config,
 		asyncByDefault,
+		persistentChildRegistry: persistentChildRegistry,
 		handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
 		tempArtifactsDir,
 		getSubagentSessionRoot,
@@ -166,7 +235,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getActionableSupervisorRequests: supervisorChannel.getActionableRequests,
 	});
 
-	registerSlashCommands(pi, state, steerView.controller);
+	registerSlashCommands(pi, state, steerView.controller, hostEditorConversation);
 
 	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";
 	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
@@ -259,6 +328,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", () => {
 		delete process.env[SUBAGENT_PARENT_SESSION_ENV];
 		steerView.closeSession();
+		hostEditorConversation.close(undefined);
+		void persistentChildRegistry.closeAll("graceful");
 		for (const unsubscribe of eventUnsubscribes) {
 			try {
 				unsubscribe();

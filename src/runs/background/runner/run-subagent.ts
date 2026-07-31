@@ -10,6 +10,7 @@ import { runDynamicStep } from "./runner-step-dynamic.ts";
 import { runParallelGroupStep } from "./runner-step-parallel.ts";
 import { runSequentialStep } from "./runner-step-sequential.ts";
 import { finalizeRun } from "./runner-finalize.ts";
+import { createRpcChildRegistry } from "../../persistent/rpc-child-registry.ts";
 import type { SubagentRunConfig } from "./types.ts";
 
 const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
@@ -17,6 +18,12 @@ const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "S
 export async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const state = createRunnerState(config);
 	const ops = createRunnerOps(state);
+	// Option B: the runner process owns the registry of its resident RPC
+	// children; graceful close happens before the runner process exits.
+	const persistentChildRegistry = config.persistentChildren === true ? createRpcChildRegistry() : undefined;
+	if (persistentChildRegistry) {
+		config.persistentChildRegistry = persistentChildRegistry;
+	}
 
 	fs.mkdirSync(state.asyncDir, { recursive: true });
 	writeAtomicJson(state.statusPath, state.statusPayload);
@@ -84,4 +91,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	}
 
 	await finalizeRun(state, ops, disposeControlInbox);
+	if (persistentChildRegistry) {
+		await persistentChildRegistry.closeAll("graceful");
+	}
 }

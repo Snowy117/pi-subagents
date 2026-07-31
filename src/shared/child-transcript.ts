@@ -7,7 +7,7 @@ export const CHILD_TRANSCRIPT_ARTIFACT_VERSION = 1;
 const DEFAULT_MAX_CHILD_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
 
 type ChildTranscriptSource = "foreground" | "async";
-type ChildTranscriptRecordType = "message" | "tool_start" | "tool_end" | "stdout" | "stderr" | "truncated";
+type ChildTranscriptRecordType = "message" | "tool_start" | "tool_end" | "stdout" | "stderr" | "truncated" | "rpc_control";
 
 type ChildTranscriptMessage = Message & {
 	model?: string;
@@ -21,6 +21,23 @@ interface ChildTranscriptEvent {
 	message?: ChildTranscriptMessage;
 	toolName?: string;
 	args?: unknown;
+}
+
+// RPC-mode records that are not agent events: responses to commands we sent,
+// the settled signal, extension UI requests, and queue/compaction/retry state.
+const RPC_CONTROL_RECORD_TYPES = new Set([
+	"response",
+	"agent_settled",
+	"extension_ui_request",
+	"queue_update",
+	"compaction_start",
+	"compaction_end",
+	"auto_retry_start",
+	"auto_retry_end",
+]);
+
+function isRpcControlRecordType(type: string): boolean {
+	return RPC_CONTROL_RECORD_TYPES.has(type);
 }
 
 interface ChildTranscriptWriterInput {
@@ -193,6 +210,17 @@ export function createChildTranscriptWriter(input: ChildTranscriptWriterInput, f
 					...baseRecord("tool_end"),
 					sourceEventType: event.type,
 					...(event.toolName ? { toolName: event.toolName } : {}),
+				});
+				return;
+			}
+			// RPC-mode records (response, agent_settled, extension_ui_request,
+			// queue_update, compaction_*, auto_retry_*) are not agent events;
+			// record them as control records so the transcript stays complete
+			// without treating them as messages/tools.
+			if (event.type && isRpcControlRecordType(event.type)) {
+				writeRecord({
+					...baseRecord("rpc_control"),
+					sourceEventType: event.type,
 				});
 			}
 		},

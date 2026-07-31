@@ -153,6 +153,7 @@ export function executeAsyncSingle(
 				controlConfig,
 				timeoutMs: params.timeoutMs,
 				deadlineAt,
+				persistentChildren: params.persistentChildren === true ? true : undefined,
 				turnBudget: params.turnBudget,
 				toolBudget: params.toolBudget,
 				controlIntercomTarget,

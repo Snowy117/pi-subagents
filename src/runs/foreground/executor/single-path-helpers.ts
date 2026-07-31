@@ -5,6 +5,7 @@ import { INTERCOM_BRIDGE_MARKER } from "../../../intercom/intercom-bridge.ts";
 import { type ModelInfo } from "../../../shared/model-info.ts";
 import { type AgentProgress, type ControlEvent, type Details, type ResolvedToolBudget, type SubagentState } from "../../../shared/types.ts";
 import { type RunSyncOptions } from "../../../shared/types/options-types.ts";
+import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
 import { notifyForegroundDetachedCompletion } from "./foreground-notify.ts";
 import { type ExecutionContextData, type ExecutorDeps } from "./types.ts";
@@ -136,6 +137,10 @@ export function buildSingleRunSyncOptions(
 		acceptance: params.acceptance,
 		acceptanceContext: { mode: "single" },
 		foregroundLiveChildren: deps.state.foregroundLiveChildren,
+		persistentChildren: deps.config.persistentChildren === undefined
+			? false
+			: resolvePersistentChildConfig(deps.config).enabled,
+		persistentChildRegistry: deps.persistentChildRegistry,
 		onDetachedExit,
 		timeoutMs: data.timeoutMs,
 		deadlineAt,

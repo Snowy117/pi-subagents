@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/07-31-improve-subagent-conversation-tui/research/pi-rpc-child-command-transport.md", "reason": "RPC prompt/get_commands/extension-ui contract that Phase 2-4 build on; verifies agent_settled availability and lifecycle options."}
+{"file": ".trellis/tasks/07-31-improve-subagent-conversation-tui/research/host-editor-routing-feasibility.md", "reason": "Host-editor routing mode design that Phase 4 implements; input-event handled contract and widget surface."}
+{"file": ".trellis/tasks/07-31-improve-subagent-conversation-tui/research/pi-native-editor-renderer-feasibility.md", "reason": "Renderer boundary for R3/AC4; which native components are reusable and which surfaces are private/unavailable."}
+{"file": ".trellis/tasks/07-31-improve-subagent-conversation-tui/research/child-extension-command-routing.md", "reason": "Superseded-by-RPC note for //name routing; documents why steer transport cannot execute child commands (AC8 context)."}

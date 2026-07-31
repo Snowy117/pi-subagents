@@ -26,6 +26,7 @@ import { resolveSingleRunOutputBaseDir } from "./parallel-helpers.ts";
 import { isResumeAmbiguity, resolveResumeTarget, type ResumeSourceTarget } from "./resume-targets.ts";
 import { type ExecutorDeps, type SubagentParamsLike } from "./types.ts";
 import * as path from "node:path";
+import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 
 
 export async function resumeAsyncRun(input: {
@@ -169,6 +170,7 @@ export async function resumeAsyncRun(input: {
 		const chain = wrapChainTasksForFork(attachChain, contextPolicy);
 		const normalized = normalizeSkillInput(input.params.skill);
 		const result = executeAsyncChain(runId, {
+			persistentChildren: input.deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(input.deps.config).enabled,
 			chain,
 			task: (input.params.task ?? followUp) || undefined,
 			attachRoot: {
@@ -224,6 +226,7 @@ export async function resumeAsyncRun(input: {
 	const artifactsDir = getArtifactsDir(parentSessionFile, effectiveCwd);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const result = executeAsyncSingle(runId, {
+			persistentChildren: input.deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(input.deps.config).enabled,
 		agent: target.agent,
 		task: buildRevivedAsyncTask(target, followUp),
 		agentConfig,

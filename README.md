@@ -213,7 +213,31 @@ The slash command is the reliable fallback when another plugin's terminal listen
 
 If you submit `/xxx` in the overlay, the overlay closes and `/xxx` is placed in the main editor. Press `Enter` there to let Pi or another plugin's normal slash-command system handle it; slash commands are not forwarded to the child.
 
-Background runs keep working after control returns to you. Inspect active runs with `subagent({ action: "status" })`, or a specific run with `subagent({ action: "status", id: "..." })`. For a read-only fleet view across active foreground and background work, use `/subagents-fleet` or `subagent({ action: "status", view: "fleet" })`. To inspect what a background child is saying without hunting through artifact directories, tail its live transcript with `subagent({ action: "status", id: "...", view: "transcript" })`; add `index` for a specific child in a parallel or chain run.
+### Persistent children and direct conversation (Option B)
+
+By default, foreground children are launched as persistent Pi RPC processes (`subagents.persistentChildren`, default `true`). The child completes its delegated task at `agent_settled`, but the process stays resident so you can keep conversing with it directly without routing follow-ups through the parent agent. When you select a completed child in `/subagents` and it still has a resident process, the full overlay chat is replaced by a host-editor routing mode: the real Pi editor (including Zentui wrappers, completion, history, multiline, paste, IME) stays mounted and focused, a read-only transcript widget appears above it, and ordinary submissions go to the child. The parent agent never sees those messages.
+
+- Ordinary text → sent to the selected child as an RPC prompt.
+- `//name args` → executed as a slash command in the **child's** runtime (e.g. `//dcp` runs the child's DCP); single `/` and `!bash` stay parent-owned.
+- `/subagents exit` (or `/subagents close`) returns editor input to the parent; the editor text and focus are untouched.
+- If the child's RPC process crashes, the widget closes and input routing returns to the parent automatically; the child's persisted session file is left intact.
+- Evicted children can be reopened: selecting a completed child with a session file spawns a fresh RPC process on that session (`--mode rpc --session <path>`), guarded so a session never has two writers.
+
+Resident children are evicted gracefully (cancel dialogs → stdin EOF → persisted shutdown) on viewer close, target switch, parent-session shutdown, idle expiry, or when the resident cap is exceeded. Settings in `~/.pi/agent/extensions/subagent/config.json`:
+
+```json
+{
+  "persistentChildren": {
+    "enabled": true,
+    "eviction": {
+      "idleMs": 900000,
+      "maxResidentChildren": 4
+    }
+  }
+}
+```
+
+`idleMs` (default 15 minutes) is how long a settled child stays resident before eviction; `maxResidentChildren` (default 4) evicts the least-recently-active settled children first, never an active one. Set `persistentChildren: false` to restore the legacy one-shot json child launch for every run.Background runs keep working after control returns to you. Inspect active runs with `subagent({ action: "status" })`, or a specific run with `subagent({ action: "status", id: "..." })`. For a read-only fleet view across active foreground and background work, use `/subagents-fleet` or `subagent({ action: "status", view: "fleet" })`. To inspect what a background child is saying without hunting through artifact directories, tail its live transcript with `subagent({ action: "status", id: "...", view: "transcript" })`; add `index` for a specific child in a parallel or chain run.
 
 They also show a compact async widget and send completion notifications. Parallel background runs show per-agent progress instead of fake chain steps. Chains with parallel groups keep their grouped shape in progress and results, so failed or paused agents stay visible next to completed ones. When a child is explicitly allowed to fan out with `tools: subagent`, its nested runs appear under that parent child in the main status tree instead of being hidden inside the child process.
 

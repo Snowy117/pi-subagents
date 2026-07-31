@@ -176,6 +176,114 @@ function isJsonMode(args) {
 	return false;
 }
 
+function isRpcMode(args) {
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] === "--mode") {
+			return args[i + 1] === "rpc";
+		}
+	}
+	return false;
+}
+
+/** Split stdin on LF only, tolerating a trailing \r (Pi RPC framing). */
+function readLines(buffer) {
+	return buffer.split("\n").map((line) => line.endsWith("\r") ? line.slice(0, -1) : line);
+}
+
+async function runRpc(response, args) {
+	// Pi RPC: commands arrive as JSONL on stdin; responses and events go out as
+	// JSONL on stdout. The mock emits the queued jsonl events (or a default
+	// assistant message for plain text responses) for each prompt, then a
+	// response + agent_settled, and stays resident until stdin EOF.
+	const entries = Array.isArray(response?.jsonl) ? response.jsonl : [];
+	const plainOutput = typeof response?.output === "string" ? response.output : undefined;
+	const receivedPrompts = [];
+	const sessionHeader = {
+		type: "session",
+		version: 3,
+		id: `mock-${process.pid}`,
+		timestamp: new Date().toISOString(),
+		cwd: process.cwd(),
+	};
+	await writeJsonlLine(sessionHeader);
+
+	let buffer = "";
+	let pending = 0;
+	let resolveIdle;
+	const idle = new Promise((resolve) => { resolveIdle = resolve; });
+	const handleLine = async (line) => {
+		if (!line.trim()) return;
+		pending++;
+		try {
+			let command;
+			try {
+				command = JSON.parse(line);
+			} catch {
+				return;
+			}
+			if (command.type === "extension_ui_response") return;
+			if (command.type !== "prompt" && command.type !== "steer" && command.type !== "follow_up" && command.type !== "get_commands" && command.type !== "abort") return;
+			// Record delivered prompt/steer payloads for parent-side assertions
+			// (e.g. proving the task text is sent over stdin in RPC mode).
+			receivedPrompts.push({ id: command.id, type: command.type, message: command.message });
+			if (command.type === "get_commands") {
+				await writeJsonlLine({ id: command.id, type: "response", command: "get_commands", success: true, data: { commands: [] } });
+				return;
+			}
+			if (command.type === "abort") {
+				await writeJsonlLine({ id: command.id, type: "response", command: "abort", success: true });
+				return;
+			}
+			await writeJsonlLine({ id: command.id, type: "response", command: command.type, success: true });
+			for (const entry of entries ?? []) {
+				if (entry?.type === "message_end") {
+					const textPart = entry.message?.content?.find?.((part) => part?.type === "text");
+					if (textPart && typeof textPart.text === "string") {
+						textPart.text = withAcceptanceReport(textPart.text, args);
+					}
+				}
+				await writeJsonlLine(entry);
+			}
+			if (entries.length === 0 && plainOutput !== undefined) {
+				await writeJsonlLine(defaultAssistantMessage(withAcceptanceReport(plainOutput, args)));
+			}
+			await writeJsonlLine({ type: "agent_settled" });
+		} finally {
+			pending--;
+			if (pending === 0) resolveIdle?.();
+		}
+	};
+
+	await new Promise((resolve) => {
+		process.stdin.setEncoding("utf-8");
+		process.stdin.on("data", (chunk) => {
+			buffer += chunk;
+			const lines = readLines(buffer);
+			buffer = lines.pop() || "";
+			for (const line of lines) void handleLine(line);
+		});
+		process.stdin.on("end", resolve);
+		process.stdin.on("close", resolve);
+	});
+	// stdin EOF: wait for in-flight command handlers to flush, then mirror Pi's
+	// graceful shutdown (persist + exit).
+	if (pending > 0) await idle;
+	// Attach received RPC payloads to the recorded call for parent assertions.
+	const callFile = fs.readdirSync(queueDir).filter((name) => name.startsWith("call-")).sort().at(-1);
+	if (callFile) {
+		try {
+			const callPath = path.join(queueDir, callFile);
+			const payload = JSON.parse(fs.readFileSync(callPath, "utf-8"));
+			payload.rpcPrompts = receivedPrompts;
+			fs.writeFileSync(callPath, JSON.stringify(payload));
+		} catch {
+			// Best effort; the base call record already exists.
+		}
+	}
+	exitAfterFlush(0);
+}
+
+
 function writeSessionFile(args) {
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] !== "--session") continue;
@@ -278,6 +386,7 @@ async function main() {
 
 	const args = process.argv.slice(2);
 	const jsonMode = isJsonMode(args);
+	const rpcMode = isRpcMode(args);
 	const response = claimNextResponse(queueDir, args) ?? defaultResponse();
 	if (response.ignoreSigterm === true) {
 		process.on("SIGTERM", () => {});
@@ -288,6 +397,11 @@ async function main() {
 		JSON.stringify({ args, systemPrompts: readSystemPromptRecords(args) }),
 		"utf-8",
 	);
+
+	if (rpcMode) {
+		await runRpc(response, args);
+		return;
+	}
 
 	if (typeof response.delay === "number" && response.delay > 0) {
 		await new Promise((resolve) => setTimeout(resolve, response.delay));

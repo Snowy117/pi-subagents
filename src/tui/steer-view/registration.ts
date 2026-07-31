@@ -15,9 +15,16 @@ export interface SteerViewRuntime {
 	dispose(): void;
 }
 
-export function createSteerViewRuntime(state: SubagentState, extensionConfig: ExtensionConfig): SteerViewRuntime {
+export interface SteerViewRuntimeOptions {
+	hostEditor?: import("./host-editor-mode.ts").HostEditorConversationHandle;
+	getResidentChild?: (target: import("./target-model.ts").SteerViewTarget) => import("../../runs/persistent/rpc-child-registry.ts").PersistentRpcChild | undefined;
+}
+
+export function createSteerViewRuntime(state: SubagentState, extensionConfig: ExtensionConfig, options: SteerViewRuntimeOptions = {}): SteerViewRuntime {
 	const config = resolveTuiConfig(extensionConfig);
 	const controller = createSteerViewController(state, {
+		hostEditor: options.hostEditor,
+		getResidentChild: options.getResidentChild,
 		isStaleContextError: isStaleExtensionContextError,
 		trustedRoots: (ctx) => {
 			const roots = extensionConfig.defaultSessionDir ? [path.resolve(expandTilde(extensionConfig.defaultSessionDir))] : [];

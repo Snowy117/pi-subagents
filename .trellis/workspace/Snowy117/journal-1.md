@@ -162,3 +162,155 @@ Upgraded Pi to 0.82.1 and added an interactive TUI picker and full child chat vi
 ### Next Steps
 
 - None - task complete
+
+## 2026-07-31 — Phase 1+2: persistent RPC execution children (foreground)
+
+### Work Done
+
+- **Phase 1 (launch plumbing)**: `buildPiArgs` gains `mode: "json"|"rpc"` (RPC: `--mode rpc`, no `-p`, no positional task/`@file`); new `rpc-protocol.ts` (LF-only JSONL write w/ drain backpressure + line reader w/ 16MB record cap, NOT readline); new `rpc-child-registry.ts` (one-writer registry + graceful/force closer: cancel dialogs → stdin EOF → SIGTERM → SIGKILL); `child-transcript.ts` tolerates `rpc_control` records (response/agent_settled/extension_ui_request/queue_update/compaction_*/auto_retry_*).
+- **Phase 2 (foreground settle-driven)**: `runSingleAttempt` launches `--mode rpc` when `options.persistentChildren`; spawns stdin `["pipe",...]`, sends initial `prompt` over stdin, registers `PersistentRpcChild` in registry. `agent_settled` event → `state.finish(0)` → finalize (process stays resident); failed/stopped runs evict via `unregister` + graceful close. `startFinalDrain` disabled for RPC mode. close-handler: settled → only stdio flush, no error injection (after detached branch). `SingleResult.residentChild` flag set on settled success; `runSync` skips `markLiveTranscriptTerminal` when residentChild.
+- Config: `resolvePersistentChildConfig(config)` in `src/extension/config.ts` (default enabled:true, idleEvictionMs 15min, maxResidentChildren 4; boolean or object form `{enabled, eviction:{idleMs,maxResidentChildren}}`); `ExtensionConfig.persistentChildren` field added; `extension/index.ts` injects `persistentChildren: {enabled:true}` default into loaded config (product default) and creates per-activation `createRpcChildRegistry()` passed via ExecutorDeps; `session_shutdown` calls `registry.closeAll("graceful")`. `buildSingleRunSyncOptions` injects `persistentChildren` (only when config field present) + registry into RunSyncOptions.
+- mock-pi-script.mjs: RPC mode support (`--mode rpc` → read JSONL commands from stdin, respond `response` + events + `agent_settled`, stay resident until stdin EOF; plain `output` responses get default assistant message; waits for pending handlers before EOF exit).
+
+### Testing
+
+- Unit: 1077 pass (rpc-protocol 8, rpc-child-registry 6, pi-args RPC 5, child-transcript RPC 2, tui-config persistent 4).
+- Integration: new `foreground-rpc-child.test.ts` (5 tests: resident-after-settle, task-over-stdin+mode arg, evictIdle, json-mode-no-registry, executor-config-injection) all pass.
+- Baseline integration suite has pre-existing failures: slash-commands-message-delivery (6 tests, fails even on clean HEAD) + async-execution-dynamic timeout test (flaky under full-suite concurrency, passes standalone 3/3). Not caused by Phase 1-2.
+
+### Next Steps
+
+- Phase 3: async runner (`run-pi-streaming.ts`, `run-single-step.ts`) settle-driven RPC completion.
+- Phase 4: viewer (steer-view host-editor routing, `//name` RPC command routing, input handler).
+- Phase 5: eviction timers, crash recovery, reopen, docs.
+
+## 2026-07-31 — Phase 3: async runner settle-driven RPC completion
+
+### Work Done
+
+- `runPiStreaming` gains `persistent?: boolean` + `registry?` params: RPC mode spawns stdin pipe, sends initial prompt, `agent_settled` → `finishResolve` (step result finalized, process stays resident, registered in runner-process registry); `close`/`error` handlers use `finishResolve` (no double-resolve). `RunPiStreamingResult.residentChild` flag. Failed settle evicts (unregister + graceful close).
+- `buildStepPiArgs` (run-single-step-helpers) honors `ctx.persistentChildren` (RPC mode args).
+- `SubagentRunConfig` + `SingleStepContext` gain `persistentChildren`/`persistentChildRegistry`.
+- `runSubagent` (runner process entry) creates a runner-scoped `createRpcChildRegistry()` when persistentChildren; closes all gracefully before runner exit. **Key architecture fact: async children are spawned inside a separate runner process, so their RPC registry lives in that process, not the parent.** Parent-side viewer access is Phase 4 cross-process work.
+- `AsyncChainParams`/`AsyncSingleParams` gain `persistentChildren`; chain-execution + single-execution pass it into `spawnRunner` cfg.
+- Executor injection: async-path, chain-path, parallel-path-helpers, async-resume (uses `input.deps.config` — NOT `deps`), single-path pass `persistentChildren: deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(deps.config).enabled` to executeAsyncChain/executeAsyncSingle. Fixed `deps is not defined` ReferenceError in async-resume.
+
+### Testing
+
+- Unit 1077 pass.
+- New async integration tests (async-execution-single.test.ts): RPC mode arg + settle-without-exit (keepAlive) — 2 tests, pass.
+- Full integration: 488 tests / 481 pass / 7 fail. Remaining failures = pre-existing baseline (slash-commands-message-delivery 6 tests fail even on clean HEAD; async-execution-dynamic timeout test flaky under suite concurrency, passes standalone). Intercom grouped/revival failures fixed (async-resume deps bug). No new regressions.
+
+### Next Steps
+
+- Phase 4: interactive viewer — steer-view host-editor routing (transcript widget above real editor via `ctx.ui.setWidget`), `pi.on("input")` handler gating on active child mode returning `{action:"handled"}`, `//name` RPC command routing via get_commands + extension_ui_request rendering, exit/switch commands.
+- Phase 5: eviction timers (idle/overflow/session_shutdown — registry already wired), crash recovery, session reopen, config docs, README.
+
+## 2026-07-31 — Phase 4: interactive host-editor routing viewer
+
+### Work Done
+
+- NEW `src/tui/steer-view/host-editor-mode.ts`: `createHostEditorConversation` — child-conversation mode that keeps the real Pi editor mounted, mounts a read-only transcript widget above it via `ctx.ui.setWidget()` (`HOST_EDITOR_WIDGET_KEY = "subagents-child-conversation"`), and routes ordinary submissions to the selected child's RPC process through `routeInput`:
+  - `!bash` and single `/` → `{action:"continue"}` (parent-owned);
+  - `//name args` → RPC `prompt: "/name args"` (child command), `{action:"handled"}`;
+  - ordinary text → RPC `prompt` with `streamingBehavior` passthrough, `{action:"handled"}`.
+  - Widget renders bounded read-only tail via `readTranscriptFallback`.
+- `extension/index.ts`: creates `getResidentChild` (maps `foreground:runId:index` target key → registry `runId/index`; async children live in runner process → Phase 5 bridge); creates `hostEditorConversation`; registers `pi.on("input")` handler gated on `hostEditorConversation.active`; passes hostEditor+getResidentChild into `createSteerViewRuntime`; `/subagents exit` via `registerSlashCommands(pi, state, controller, hostEditor)`; session_shutdown closes host-editor + registry.closeAll; runtimeCleanup disposes conversation.
+- `open-view.ts`: `SteerViewControllerOptions` gains `hostEditor`/`getResidentChild`; `showChat` activates host-editor mode when resident child exists (returns `{kind:"picker"}` synchronously, notify banner); picker filter shows `target.active || getResidentChild(target)` so settled resident children are selectable; `open()` loop exits when hostEditor.active matches target.
+- `registration.ts`: `createSteerViewRuntime(state, config, options)` passes hostEditor/getResidentChild to controller.
+- `registration.ts` (slash): `/subagents exit|close` closes host-editor mode + notify.
+
+### Testing
+
+- Unit: 1083 pass (new host-editor-mode.test.ts 6 tests: inactive→open, reject-no-resident, ordinary routing, //name routing, slash/!bash parent-owned, close-stops-routing).
+- Integration: steer-view-entry.test.ts +2 (exit command, picker activation) — 7/7.
+- Full suite: 490/483/7 = baseline failures only (slash-commands-message-delivery 6 pre-existing + async-execution-dynamic timeout flaky). No new regressions.
+
+### Next Steps
+
+- Phase 5: idle-eviction timer + overflow eviction wiring in extension runtime, crash recovery (RPC child crash → viewer error + read-only fallback), session reopen via --session bridge (guarded), config docs + README (persistentChildren/eviction keys), CHANGELOG.
+
+## 2026-07-31 — Phase 5: eviction, crash recovery, reopen, docs
+
+### Work Done
+
+- `extension/index.ts`: eviction loop (every 60s, `resolvePersistentChildConfig(config)` → `evictIdle(idleEvictionMs)` + `evictOverflow(maxResidentChildren)`; config changes take effect next tick; timer cleared in runtimeCleanup). Reopen bridge: `createReopenBridge` (registry guard — never reopens while a resident entry exists; rebuilds minimal `--mode rpc --session <path>` args; original per-child flags not retained post-eviction).
+- NEW `src/tui/steer-view/reopen-bridge.ts`: `createReopenBridge({registry, getChildLaunchArgs, cwd, env})` → `reopen(target)` returns resident child or undefined; `close()` → closeAll graceful. Fixed TDZ (assign `resident.close = createRpcChildCloser(resident, {})` after object creation).
+- `host-editor-mode.ts`: crash recovery — on `resident.closed` while active, auto-close mode so input routing returns to parent (parent never torn down by child crash).
+- Docs: README new section "Persistent children and direct conversation (Option B)" (host-editor routing, //name, /subagents exit, eviction settings JSON example with defaults idleMs 900000 / maxResidentChildren 4 / enabled true); CHANGELOG [Unreleased] Added entry.
+
+### Testing
+
+- Unit: 1086 pass (new reopen-bridge.test.ts 3 tests: fresh reopen, one-writer guard reuse, no-session-file undefined).
+- Integration: 490/482/8 = baseline + flaky only (slash-commands-message-delivery 6 pre-existing, async-execution-dynamic timeout flaky, fork-context-async-preflight flaky — both pass standalone 9/9). No new regressions across Phases 1-5.
+
+### Status
+
+All 5 phases complete. Remaining for finish: trellis-update-spec, commit, then check subagent dispatch.
+
+## 2026-07-31 — trellis-check round 1 fixes
+
+### Work Done
+
+Dispatched `trellis-check` subagent (run cc3b75e1) after Phases 1-5. Findings fixed:
+
+- **BLOCKER-1** (async RPC empty prompt): `runPiStreaming` now takes an explicit `task` parameter (passed by `runSingleStep`); RPC prompt uses it instead of scraping argv for "Task: " (which RPC mode never embeds). Added mock rpcPrompts recording + async test assertion that stdin prompt contains the task text (regression guard).
+- **MAJOR-2** (R6/AC8 //name + UI relay): `host-editor-mode.ts` rewritten — `refreshCommands` performs `get_commands` with request-id correlation + TTL cache (30s) + bounded 2s wait; unknown `//name` → visible "unavailable" notice, never a prompt; stdout streamed for `extension_ui_request` relay (`notify` → viewer notice). Tests updated: //name validates-then-executes, unknown rejected, notify relayed.
+- **MAJOR-4** (detach leak): `run-single-attempt.ts` detached branch now unregisters + writes `{type:"abort"}` + graceful close of the resident RPC child (decided 2026-07-31 contract).
+- **MEDIUM-5** (async final drain): `run-pi-streaming.ts` `startFinalDrain` returns early when `persistent`.
+- **MEDIUM-6** (concurrent writer on retry): failed settle in run-pi-streaming evicts and resolves the step only after graceful close completes (`.then(() => finishResolve)`), keeping the session single-writer.
+- **LOW-7**: close-handler settled early-return moved before error injection (`state.settled && !state.detached`).
+- **LOW-8**: eviction loop re-reads config via `loadConfig()` each 60s tick (dynamic changes take effect).
+- **LOW-9**: reopen args now include `--extension PROMPT_RUNTIME_EXTENSION_PATH` (exported from pi-args); comment corrected to not claim full flag retention.
+- **LOW-10**: `rpc-protocol.ts` adds `stdin.on("error", noop)` + `safeWrite` try/catch (dead-child writes never crash the host).
+
+**Gotcha found during verification**: `await` inside the synchronous `processStdoutLine` in run-pi-streaming is a ParseError (strip-types) — the failed-settle close must be `.then()`-chained, not awaited inline. Runner stderr log (`runner.stderr.log`) exposed the exact error.
+
+### Testing
+
+- Unit 1088 pass; async-execution-single 13/13; host-editor 8/8; e2e re-verified.
+- MAJOR-3 (async resident unreachable from viewer) accepted as documented limitation (runner-process registry; cross-process bridge deferred per design).
+
+## 2026-07-31 — trellis-check round 2 fixes
+
+### Work Done
+
+Second trellis-check (run 6c5cfa80) confirmed all 9 round-1 defects fixed, found 3 new:
+- **A (LOW)**: `refreshCommands` timeout leaked a stdout listener and cached the empty timeout result for 30s (real commands reported "unavailable" after a slow response). Fixed: `finish(names, cache)` — timeout/no-stdout path returns empty WITHOUT caching and removes the listener; only a real correlated response populates the cache.
+- **B (MEDIUM)**: `lastActivityAt` never refreshed by viewer activity — idle/cap eviction could evict the child being conversed with, dropping the next routed input. Fixed: `routeInput` touches `resident.lastActivityAt`; eviction loop skips the active viewer target (`evictIdle`/`evictOverflow` gained `{ except?: string }`; index.ts computes the active resident key from `hostEditorConversation.targetKey`).
+- **C (LOW)**: failed-settle race resolves via close-handler (exitCode 0 + error) — downstream compensates; added integration test asserting failed settle → step failed + error (async-execution-single 14/14).
+
+### Testing
+
+- Unit 1092 pass (rpc-child-registry +2 except tests, host-editor 8).
+- async-execution-single 14/14 (incl. new failed-settle eviction test).
+- Integration/e2e re-verified; baseline failures only (slash 6 pre-existing).
+
+## 2026-07-31 — trellis-check round 3 fixes
+
+### Work Done
+
+Third trellis-check (run 7aea91e2) confirmed round-2 fixes A/B/C correct, no blockers. One MEDIUM found (pre-existing since Phase 4):
+- **Target switch while host-editor mode active did not switch** (open-view.ts): `showChat` now closes the old host-editor conversation before opening a new target (`if (hostEditor.active && targetKey !== target.key) close(ctx)`); the open() loop exits whenever `hostEditor.active` (not only when the same target is re-selected). `controller.open()` is re-entrant, so a second `/subagents` reopens the picker and switching works. Added integration test (8/8 steer-view-entry).
+- Also added refreshCommands timeout-path unit test (9/9 host-editor-mode): after a 2s get_commands timeout, a later `//name` re-sends get_commands (empty timeout result is not cached).
+
+### Testing
+
+- Unit 1092+; steer-view-entry 8/8; host-editor-mode 9/9; integration/e2e re-verified; baseline failures only (slash 6 pre-existing).
+
+## 2026-07-31 — trellis-check round 4 + final
+
+### Work Done
+
+Fourth trellis-check (run f70f4a45) verified target-switch fix + timeout test correct, no new defects, and stated no further review rounds needed. Two non-blocking suggestions also fixed:
+- **Same-key re-select**: `open-view.ts` showChat returns `{kind:"picker"}` early when re-selecting the active host-editor target (no-op, avoids falling into the overlay chat).
+- **Stale refresh race**: `host-editor-mode.ts` refreshCommands records the requesting resident key; `finish` only writes `commandCache` when `currentResident?.key === requestingKey` (a stale get_commands resolving after target switch cannot poison the active child's cache).
+
+### Testing
+
+- Unit 1091/1091; e2e 2/2 (first run occasionally flaky); integration 492/482/10 = 6 pre-existing slash + 4 async/result-watcher flakes (all pass standalone 33/33).
+- 4 review rounds complete: round 1 (9 defects), round 2 (3 new), round 3 (1 medium target-switch), round 4 (clean, no further rounds needed). All fixed and verified.
+
+### Status
+
+Implementation + verification complete. Next: commit (Phase 3.4), then /trellis:finish-work.

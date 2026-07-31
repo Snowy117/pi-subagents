@@ -133,6 +133,9 @@ export async function runSingleStep(
 			ctx.registerTimeout,
 			ctx.timeoutMessage,
 			ctx.registerTurnBudgetAbort,
+			ctx.persistentChildren === true,
+			ctx.persistentChildRegistry,
+			task,
 		);
 		if (run.turnBudget) turnBudget = run.turnBudget;
 		else if (ctx.turnBudget) {

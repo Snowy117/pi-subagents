@@ -155,6 +155,8 @@ export async function runParallelGroupStep(state: RunnerState, ops: RunnerOps, g
 					childIntercomTarget: state.config.childIntercomTargets?.[fi],
 					orchestratorIntercomTarget: state.config.controlIntercomTarget,
 					nestedRoute: state.config.nestedRoute,
+		persistentChildren: state.config.persistentChildren,
+		persistentChildRegistry: state.config.persistentChildRegistry,
 					registerInterrupt: (interrupt) => ops.registerStepInterrupt(fi, interrupt),
 					registerTimeout: (interrupt) => ops.registerStepTimeout(fi, interrupt),
 					registerTurnBudgetAbort: (abort) => ops.registerStepTurnBudgetAbort(fi, abort),

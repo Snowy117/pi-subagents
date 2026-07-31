@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Persistent RPC execution children (Option B): foreground and async children launch as `--mode rpc` processes that stay resident after `agent_settled`, enabling direct multi-turn conversation with a selected child. The interactive `/subagents` view gains a host-editor routing mode: the real Pi editor stays mounted, a read-only transcript widget shows the child, ordinary submissions and `//name` commands route to the child's own runtime, and `/subagents exit` returns input to the parent. Resident children are evicted gracefully on idle expiry (`subagents.persistentChildren.eviction.idleMs`, default 15 min), resident-cap overflow (`maxResidentChildren`, default 4), viewer close, target switch, or session shutdown; evicted sessions can be reopened via a guarded `--session` RPC bridge. New config surface: `subagents.persistentChildren` (boolean or `{enabled, eviction}`), default enabled.
+
 ### Changed
 - Updated the bundled `pi-subagents` skill so Fable mode is the default orchestration posture for complex work, and refreshed recent command/config guidance.
 - Documented `contact_supervisor` structured interview requests in the default child bridge instructions.

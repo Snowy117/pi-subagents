@@ -84,6 +84,10 @@ export interface RunSyncOptions {
 		dynamicGroup?: boolean;
 	};
 	foregroundLiveChildren?: import("./async-types.ts").SubagentState["foregroundLiveChildren"];
+	/** Launch the child as a persistent Pi RPC process (Option B). Defaults to false; the extension config layer resolves the user-facing default. */
+	persistentChildren?: boolean;
+	/** Parent-side registry for resident RPC children; required when persistentChildren is true. */
+	persistentChildRegistry?: import("../../runs/persistent/rpc-child-registry.ts").RpcChildRegistry;
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";
@@ -136,6 +140,14 @@ export interface ExtensionConfig {
 	/** Global cap on simultaneously-running subagent tasks within a single run. Defaults to 20. */
 	globalConcurrencyLimit?: number;
 	control?: ControlConfig;
+	/** Persistent RPC child lifecycle: enabled toggle + eviction settings (Option B). */
+	persistentChildren?: boolean | {
+		enabled?: boolean;
+		eviction?: {
+			idleMs?: number;
+			maxResidentChildren?: number;
+		};
+	};
 	completionBatch?: CompletionBatchConfig;
 	turnBudget?: TurnBudgetConfig;
 	toolBudget?: ToolBudgetConfig;

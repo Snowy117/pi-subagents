@@ -11,7 +11,7 @@
  * Skips gracefully when the pi runtime packages are not importable.
  */
 
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -36,6 +36,7 @@ const BOGUS_EXTRA_DIRS = path.join(os.tmpdir(), "nonexistent-pi-subagents-e2e-ex
 const BOGUS_PI_BINARY = path.join(os.tmpdir(), "nonexistent-pi-binary-e2e");
 const BOGUS_PI_PACKAGE_ROOT = path.join(os.tmpdir(), "nonexistent-pi-coding-agent-package-root-e2e");
 const ISOLATED_ENV_KEYS = [
+	"PI_SUBAGENT_E2E_JSON_CHILD",
 	"PI_SUBAGENT_CHILD",
 	"PI_SUBAGENT_FANOUT_CHILD",
 	"PI_SUBAGENT_DEPTH",
@@ -49,15 +50,24 @@ const ISOLATED_ENV_KEYS = [
 describe("real Pi-session subagent E2E", { skip: !available ? "pi runtime packages not available" : undefined }, () => {
 	let run: RealSessionRun | undefined;
 
+	const E2E_JSON_ENV = "PI_SUBAGENT_E2E_JSON_CHILD";
 	afterEach(async () => {
 		await run?.dispose();
 		run = undefined;
+		delete process.env[E2E_JSON_ENV];
+	});
+	beforeEach(() => {
+		// The e2e harness drives the json child path; the extension must not
+		// default to persistent RPC children for this legacy transport test.
+		process.env[E2E_JSON_ENV] = "1";
 	});
 
 	it("boots the extension in a real parent session and delivers a faux child result", async () => {
 		const { routeParentThroughSubagent, runRealSubagentSession, subagentToolResults } = await import("../support/real-session-runner.ts");
 
 		const previousEnv = new Map(ISOLATED_ENV_KEYS.map((key) => [key, process.env[key]]));
+		// The e2e harness drives the json child path; the extension must not
+		// default to persistent RPC children for this legacy transport test.
 		process.env.PI_SUBAGENT_CHILD = "1";
 		process.env.PI_SUBAGENT_FANOUT_CHILD = "1";
 		process.env.PI_SUBAGENT_DEPTH = "1";

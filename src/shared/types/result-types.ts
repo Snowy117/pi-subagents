@@ -184,6 +184,8 @@ export interface SingleResult {
 	acceptance?: AcceptanceLedger;
 	transcriptPath?: string;
 	transcriptError?: string;
+	/** True when the child remains resident (Option B) and the live transcript is still live. */
+	residentChild?: boolean;
 	children?: NestedRunSummary[];
 }
 

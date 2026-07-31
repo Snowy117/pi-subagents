@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { resolveTuiConfig, saveConfig } from "../../src/extension/config.ts";
+import { resolvePersistentChildConfig, resolveTuiConfig, saveConfig } from "../../src/extension/config.ts";
 
 describe("TUI config", () => {
 	it("enables Down by default", () => assert.equal(resolveTuiConfig({}).openSubagentsOnDown, true));
@@ -19,5 +19,41 @@ describe("TUI config", () => {
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("persistent child config", () => {
+	it("enables persistent children by default with 15min idle and cap 4", () => {
+		const resolved = resolvePersistentChildConfig({});
+		assert.equal(resolved.enabled, true);
+		assert.equal(resolved.idleEvictionMs, 15 * 60 * 1000);
+		assert.equal(resolved.maxResidentChildren, 4);
+	});
+
+	it("honors boolean shorthand", () => {
+		assert.equal(resolvePersistentChildConfig({ persistentChildren: false }).enabled, false);
+		assert.equal(resolvePersistentChildConfig({ persistentChildren: true }).enabled, true);
+	});
+
+	it("honors object form with eviction overrides", () => {
+		const resolved = resolvePersistentChildConfig({
+			persistentChildren: {
+				enabled: false,
+				eviction: { idleMs: 60_000, maxResidentChildren: 8 },
+			},
+		});
+		assert.equal(resolved.enabled, false);
+		assert.equal(resolved.idleEvictionMs, 60_000);
+		assert.equal(resolved.maxResidentChildren, 8);
+	});
+
+	it("normalizes invalid eviction values back to defaults", () => {
+		const resolved = resolvePersistentChildConfig({
+			persistentChildren: {
+				eviction: { idleMs: -5, maxResidentChildren: 0 },
+			},
+		});
+		assert.equal(resolved.idleEvictionMs, 15 * 60 * 1000);
+		assert.equal(resolved.maxResidentChildren, 4);
 	});
 });

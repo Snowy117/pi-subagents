@@ -89,6 +89,14 @@ export function registerProcessHandlers(state: SingleAttemptState): void {
 		cleanupTempDir(state.tempDir);
 		if (state.buf.trim()) state.processLine(state.buf);
 		if (state.stderrBuf.trim()) state.shared.transcriptWriter?.writeStderrText(state.stderrBuf);
+		// After agent_settled the result is already finalized; the process is
+		// being evicted (viewer close, target switch, idle expiry) and only
+		// stdio flush remains — never inject errors into a settled result.
+		// Detached children still run their exit finalization below.
+		if (state.settled && !state.detached) {
+			state.processClosed = true;
+			return;
+		}
 		if (!state.result.error && state.assistantError) state.result.error = state.assistantError;
 		const forcedDrainAfterFinalSuccess = state.forcedTerminationSignal && state.cleanTerminalAssistantStopReceived && !state.result.error;
 		if (code !== 0 && state.stderrBuf.trim() && !state.result.error && !forcedDrainAfterFinalSuccess) {

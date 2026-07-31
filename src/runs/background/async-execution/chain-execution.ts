@@ -135,6 +135,7 @@ export function executeAsyncChain(
 				globalConcurrencyLimit: params.globalConcurrencyLimit,
 				workflowGraph,
 				nestedRoute: nestedRoute ?? inheritedNestedRoute,
+				persistentChildren: params.persistentChildren === true ? true : undefined,
 				nestedSelf: inheritedNestedRoute && nestedAddress ? {
 					parentRunId: nestedAddress.parentRunId,
 					parentStepIndex: nestedAddress.parentStepIndex,
