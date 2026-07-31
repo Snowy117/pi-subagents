@@ -133,7 +133,16 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (kind !== "foreground" || !runId || !indexText) return undefined;
 		const key = `${runId}/${indexText}`;
 		const existing = persistentChildRegistry.get(key);
-		if (existing) return existing;
+		if (existing) {
+			// A resident entry whose process has already exited is dead: drop it so
+			// a stale handle is never handed to the viewer and reopen can take over
+			// (belt-and-suspenders for entries left by older runs/crashes).
+			if (existing.proc.exitCode !== null) {
+				persistentChildRegistry.unregister(key);
+				return reopenBridge.reopen(target);
+			}
+			return existing;
+		}
 		// Reopen an evicted settled child's session when it has a persisted
 		// session file; the registry guard prevents concurrent writers.
 		return reopenBridge.reopen(target);

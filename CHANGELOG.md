@@ -10,6 +10,8 @@
 - Documented `contact_supervisor` structured interview requests in the default child bridge instructions.
 
 ### Fixed
+- Fix the interactive child conversation view: the host-editor transcript widget now shows the selected child's real conversation (seeded from its transcript, streaming follow-up responses live) instead of an empty strip, and the footer status line indicates the active child while child mode is open.
+- When a selected child's RPC process ends (failed run, timeout, crash, eviction), child conversation mode auto-closes so editor input returns to the parent — routed messages no longer silently dead-end into a dead child. Failed runs are also evicted from the resident-child registry so they cannot be re-selected as dead conversations.
 - Preserve async resume model/thinking metadata for live, completed, and result-only child runs, and repair stale status metadata from final results. Thanks to BoxChen (@nishuzumi) for #403.
 - Gate foreground `contact_supervisor`/intercom detaches on delivered supervisor handoff events, keep detached foreground runs visible through status/fleet, and mark detached placeholders as non-successful so missing explicit outputs are not mistaken for completed work.
 

@@ -219,8 +219,10 @@ By default, foreground children are launched as persistent Pi RPC processes (`su
 
 - Ordinary text → sent to the selected child as an RPC prompt.
 - `//name args` → executed as a slash command in the **child's** runtime (e.g. `//dcp` runs the child's DCP); single `/` and `!bash` stay parent-owned.
+- The transcript widget is seeded from the child's transcript and streams follow-up responses live, so the selected child's conversation stays visible while you type in the host editor.
+- While child mode is active, the footer status line shows `subagent: <agent> · <runId>:<index> · <status>`.
 - `/subagents exit` (or `/subagents close`) returns editor input to the parent; the editor text and focus are untouched.
-- If the child's RPC process crashes, the widget closes and input routing returns to the parent automatically; the child's persisted session file is left intact.
+- If the child's RPC process ends (crash, eviction, failed run, timeout), the widget closes and input routing returns to the parent automatically instead of silently dropping messages; the child's persisted session file is left intact.
 - Evicted children can be reopened: selecting a completed child with a session file spawns a fresh RPC process on that session (`--mode rpc --session <path>`), guarded so a session never has two writers.
 
 Resident children are evicted gracefully (cancel dialogs → stdin EOF → persisted shutdown) on viewer close, target switch, parent-session shutdown, idle expiry, or when the resident cap is exceeded. Settings in `~/.pi/agent/extensions/subagent/config.json`:

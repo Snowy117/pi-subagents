@@ -296,18 +296,21 @@ export async function runSingleAttempt(
 			return finalized;
 		}
 		// A successfully settled resident child stays in the registry for later
-		// viewer turns; failed/stopped runs have no conversational future, so
-		// evict them now (abort + graceful close).
-		if (persistent && registry && state.settled && finalized.exitCode === 0 && !finalized.error) {
+		// viewer turns. Every other outcome (failed, timed out, interrupted, or
+		// crashed before settle) has no conversational future: unregister and
+		// release the process so the viewer can never route into a dead child
+		// and the eviction timer never has to find a lingering entry.
+		if (persistent && registry) {
 			const resident = registry.get(childKey);
 			if (resident) {
-				resident.settled = true;
-				finalized.residentChild = true;
+				if (state.settled && finalized.exitCode === 0 && !finalized.error) {
+					resident.settled = true;
+					finalized.residentChild = true;
+				} else {
+					registry.unregister(childKey);
+					void resident.close("graceful");
+				}
 			}
-		} else if (persistent && registry && state.settled && (finalized.exitCode !== 0 || finalized.error)) {
-			const failed = registry.get(childKey);
-			registry.unregister(childKey);
-			void failed?.close("graceful");
 		}
 		removeLiveChild(finalized.exitCode === 0 && !finalized.error ? "completed" : "failed");
 		return finalized;
