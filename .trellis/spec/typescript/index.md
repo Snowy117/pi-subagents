@@ -26,6 +26,7 @@ fits in.
 | [Testing Guidelines](./testing-guidelines.md) | `node:test` + `assert/strict`, three tiers, injected fakes | ✅ Filled |
 | [Error & I/O Guidelines](./error-and-io-guidelines.md) | Atomic JSON, dependency injection, best-effort catch, errno branching | ✅ Filled |
 | [Cross-Extension Contracts](./cross-extension-contracts.md) | Co-existence with pi-intercom: tool-name collision, cross-protocol handshake, reply-path asymmetry | ✅ Filled |
+| [Interactive Subagent Control](./subagent-interactive-control.md) | Parent-TUI overlay, child action protocol, live transcript, steer, and plugin-compatibility contracts | ✅ Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Required/forbidden patterns, review checklist | ✅ Filled |
 
 Also see the cross-cutting thinking guides in
