@@ -128,3 +128,37 @@ Implemented event-driven supervisor attention for the pi-subagents wait tool: wa
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Interactive subagent control view
+
+**Date**: 2026-07-31
+**Task**: Interactive subagent control view
+**Branch**: `main`
+
+### Summary
+
+Upgraded Pi to 0.82.1 and added an interactive TUI picker and full child chat view with async and foreground steering, semantic child thinking controls, safe live transcripts, plugin-compatible slash and Down entry, documentation, executable specs, and full tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `49375e6` | (see git log) |
+| `9a026c2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
