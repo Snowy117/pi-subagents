@@ -1,0 +1,10 @@
+{"file":".trellis/spec/typescript/index.md","reason":"Run the repository Quality Check and verify project-wide conventions."}
+{"file":".trellis/spec/typescript/quality-guidelines.md","reason":"Full-scope review checklist and forbidden-pattern checks."}
+{"file":".trellis/spec/typescript/schema-and-type-safety.md","reason":"Review the control request schema and action dispatch exhaustiveness."}
+{"file":".trellis/spec/typescript/error-and-io-guidelines.md","reason":"Review inbox/tailer safety, cleanup, atomicity, and error behavior."}
+{"file":".trellis/spec/typescript/cross-extension-contracts.md","reason":"Verify other extensions, slash commands, widgets, and editor behavior remain compatible."}
+{"file":".trellis/spec/typescript/testing-guidelines.md","reason":"Verify appropriate unit, integration, and e2e coverage."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/steer-channel.md","reason":"Compare implementation with established async steer semantics and foreground constraints."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/transcript-access.md","reason":"Verify transcript tail safety, real-time behavior, and fallbacks."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/tui-integration-points.md","reason":"Verify the TUI integration follows existing patterns and cleanup rules."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/pi-082-tui-control-contracts.md","reason":"Verify implementation against the target Pi 0.82 runtime and protocol contracts."}

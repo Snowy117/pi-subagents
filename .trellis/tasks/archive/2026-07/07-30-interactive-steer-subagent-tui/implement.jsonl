@@ -1,0 +1,12 @@
+{"file":".trellis/spec/typescript/index.md","reason":"Pre-development checklist and package conventions for all TypeScript changes."}
+{"file":".trellis/spec/typescript/directory-structure.md","reason":"Place the new TUI domain and shared child-control protocol in the correct responsibility boundaries."}
+{"file":".trellis/spec/typescript/module-and-export-guidelines.md","reason":"Follow this repository's ESM, import, and export conventions."}
+{"file":".trellis/spec/typescript/schema-and-type-safety.md","reason":"Define the extensible child-control request envelope as a safe discriminated union."}
+{"file":".trellis/spec/typescript/error-and-io-guidelines.md","reason":"Implement atomic file-inbox writes, tolerant tail reads, and injectable I/O consistently."}
+{"file":".trellis/spec/typescript/cross-extension-contracts.md","reason":"Preserve compatibility with other Pi extensions, commands, widgets, and editor overrides."}
+{"file":".trellis/spec/typescript/testing-guidelines.md","reason":"Add unit, integration, and real-session tests using project conventions."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/run-registry.md","reason":"Run enumeration and resolver/tracker integration points."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/steer-channel.md","reason":"Existing async steer inbox flow and foreground wiring gap."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/transcript-access.md","reason":"Structured child transcript format, safe fallback chain, and incremental tail approach."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/tui-integration-points.md","reason":"Pi TUI APIs, existing ChainClarifyComponent pattern, cleanup discipline, and extension registration points."}
+{"file":".trellis/tasks/07-30-interactive-steer-subagent-tui/research/pi-082-tui-control-contracts.md","reason":"Verified Pi 0.82 overlay, terminal-input, thinking-level, action-channel, foreground routing, and live-transcript contracts."}
