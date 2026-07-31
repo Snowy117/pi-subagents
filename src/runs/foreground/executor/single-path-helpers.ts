@@ -135,6 +135,7 @@ export function buildSingleRunSyncOptions(
 		skills: effectiveSkills,
 		acceptance: params.acceptance,
 		acceptanceContext: { mode: "single" },
+		foregroundLiveChildren: deps.state.foregroundLiveChildren,
 		onDetachedExit,
 		timeoutMs: data.timeoutMs,
 		deadlineAt,

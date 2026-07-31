@@ -8,7 +8,7 @@ interface ClarifyTestModel {
 	id: string;
 	fullId: string;
 	reasoning?: boolean;
-	thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh", string | null>>;
+	thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
 }
 
 interface ClarifyTestComponent {

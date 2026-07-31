@@ -1,6 +1,12 @@
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-export type ThinkingLevel = typeof THINKING_LEVELS[number];
-export type ThinkingLevelMap = Partial<Record<ThinkingLevel, string | null>>;
+import type {
+	ModelThinkingLevel,
+	ThinkingLevelMap as PiThinkingLevelMap,
+} from "@earendil-works/pi-ai";
+
+const DEFAULT_SUPPORTED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const satisfies readonly ModelThinkingLevel[];
+export const THINKING_LEVELS = [...DEFAULT_SUPPORTED_THINKING_LEVELS, "xhigh", "max"] as const satisfies readonly ModelThinkingLevel[];
+export type ThinkingLevel = ModelThinkingLevel;
+export type ThinkingLevelMap = PiThinkingLevelMap;
 
 export interface ModelInfo {
 	provider: string;
@@ -63,15 +69,15 @@ export function findModelInfo(model: string | undefined, availableModels: ModelI
 }
 
 export function getSupportedThinkingLevels(model: ModelInfo | undefined): ThinkingLevel[] {
-	if (!model) return [...THINKING_LEVELS];
+	if (!model) return [...DEFAULT_SUPPORTED_THINKING_LEVELS];
 	if (model.reasoning === false) return ["off"];
 
-	if (!model.thinkingLevelMap) return [...THINKING_LEVELS];
+	if (!model.thinkingLevelMap) return [...DEFAULT_SUPPORTED_THINKING_LEVELS];
 
 	const levels = THINKING_LEVELS.filter((level) => {
 		const mapped = model.thinkingLevelMap?.[level];
 		if (mapped === null) return false;
-		if (level === "xhigh") return mapped !== undefined;
+		if (level === "xhigh" || level === "max") return mapped !== undefined;
 		return true;
 	});
 	return levels;

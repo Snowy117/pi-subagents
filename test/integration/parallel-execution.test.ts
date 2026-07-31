@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
+import { requestControlAction } from "../../src/runs/shared/control-actions/channel.ts";
 import {
 	createEventBus,
 	createMockPi,
@@ -112,10 +113,13 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		removeTempDir(tempDir);
 	});
 
-	function makeExecutor(agents = [makeAgent("echo")]) {
+	function makeExecutor(
+		agents = [makeAgent("echo")],
+		state: any = { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
+	) {
 		return createSubagentExecutor({
 			pi: { events: createEventBus(), getSessionName: () => undefined },
-			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
+			state,
 			config: {},
 			asyncByDefault: false,
 			tempArtifactsDir: tempDir,
@@ -149,6 +153,41 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		assert.equal(results[0].agent, "agent-a");
 		assert.equal(results[1].agent, "agent-b");
 		assert.equal(results[2].agent, "agent-c");
+	});
+
+	it("registers parallel foreground children until each child is terminal", async () => {
+		mockPi.onCall({ delay: 300, output: "first done" });
+		mockPi.onCall({ delay: 300, output: "second done" });
+		const state: any = {
+			baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(),
+			foregroundLiveChildren: new Map(), lastForegroundControlId: null,
+		};
+		const executor = makeExecutor(makeAgentConfigs(["agent-a", "agent-b"]), state);
+		const executionPromise = executor.execute(
+			"parallel-live-registry",
+			{ tasks: [{ agent: "agent-a", task: "First" }, { agent: "agent-b", task: "Second" }], concurrency: 2 },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		const deadline = Date.now() + 2000;
+		while (state.foregroundLiveChildren.size < 2 && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.equal(state.foregroundLiveChildren.size, 2);
+		const runDirs = new Set([...state.foregroundLiveChildren.values()].map((child: any) => path.dirname(child.controlRoot)));
+		assert.equal(runDirs.size, 1);
+		for (const child of state.foregroundLiveChildren.values() as Iterable<any>) {
+			assert.match(child.transcriptPath, /_transcript\.jsonl$/);
+			assert.equal(fs.existsSync(child.transcriptPath), true);
+			requestControlAction(child.actionControlDir, "cycleThinking", { source: "test" });
+		}
+		assert.ok([...runDirs].every((runDir) => fs.existsSync(runDir as string)));
+
+		const result = await executionPromise;
+		assert.equal(result.isError, undefined);
+		assert.equal(state.foregroundLiveChildren.size, 0);
+		assert.ok([...runDirs].every((runDir) => !fs.existsSync(runDir as string)));
 	});
 
 	it("all agents get independent results", async () => {

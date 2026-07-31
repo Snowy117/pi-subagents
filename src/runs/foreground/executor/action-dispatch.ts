@@ -16,7 +16,7 @@ import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as path from "node:path";
 import { appendStepToAsyncChain } from "./chain-append.ts";
 import { getForegroundControl, foregroundStatusResult, nestedResolutionScopeForExecutor, trustedSessionRootsForStatus } from "./foreground-state.ts";
-import { interruptAsyncRun, steerAsyncRun } from "./interrupt-steer.ts";
+import { interruptAsyncRun, steerAsyncRun, steerForegroundRun } from "./interrupt-steer.ts";
 import { interruptNestedRun, steerNestedRun } from "./nested-runs.ts";
 import { resumeAsyncRun } from "./async-resume.ts";
 import { type ExecutorDeps, type SubagentParamsLike, MUTATING_MANAGEMENT_ACTIONS } from "./types.ts";
@@ -130,7 +130,7 @@ export async function dispatchAction(input: {
 			return { content: [{ type: "text", text }], isError: true, details: { mode: "management", results: [] } };
 		}
 		if (resolved?.kind === "nested") return steerNestedRun({ target: resolved, message, index: params.index });
-		if (resolved?.kind === "foreground") return { content: [{ type: "text", text: "action='steer' currently supports live async Pi child sessions only; use action='interrupt' or action='resume' for foreground runs." }], isError: true, details: { mode: "management", results: [] } };
+		if (resolved?.kind === "foreground") return steerForegroundRun({ state: deps.state, runId: resolved.id, message, index: params.index });
 		if (resolved?.kind !== "async") return { content: [{ type: "text", text: `No async run found for '${targetRunId}'.` }], isError: true, details: { mode: "management", results: [] } };
 		return steerAsyncRun({ state: deps.state, runId: resolved.id, message, index: params.index, kill: deps.kill, location: resolved.location });
 	}

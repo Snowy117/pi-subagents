@@ -3,6 +3,8 @@
 import { type IntercomBridgeState, resolveSubagentIntercomTarget } from "../../../intercom/intercom-bridge.ts";
 import { type ControlEvent, type Details, type ResolvedControlConfig, type SubagentState, SUBAGENT_CONTROL_EVENT, SUBAGENT_CONTROL_INTERCOM_EVENT } from "../../../shared/types.ts";
 import { deliverInterruptRequest, requestAsyncSteer } from "../../background/control-channel.ts";
+import { writeSteerRequestToDir } from "../../background/control-channel.ts";
+import { randomUUID } from "node:crypto";
 import { reconcileAsyncRun } from "../../background/stale-run-reconciler.ts";
 import { formatControlIntercomMessage, formatControlNoticeMessage, shouldNotifyControlEvent } from "../../shared/subagent-control.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -135,4 +137,50 @@ export function steerAsyncRun(input: {
 		content: [{ type: "text", text: `Steering queued for async run ${status.runId}${childText}. Delivery requires a live Pi child session that supports mid-run steering.` }],
 		details: { mode: "management", results: [] },
 	};
+}
+
+export function steerForegroundRun(input: {
+	state: SubagentState;
+	runId: string;
+	message: string;
+	index?: number;
+}): AgentToolResult<Details> {
+	const control = input.state.foregroundControls.get(input.runId);
+	const children = [...(input.state.foregroundLiveChildren?.values() ?? [])]
+		.filter((child) => child.runId === input.runId && child.status === "running")
+		.sort((left, right) => left.index - right.index);
+	const child = input.index === undefined
+		? children.length === 1 ? children[0] : undefined
+		: children.find((candidate) => candidate.index === input.index);
+	if (!child) {
+		const reason = input.index === undefined && children.length > 1
+			? `Foreground run '${input.runId}' has ${children.length} live children; provide index.`
+			: `Foreground run '${input.runId}' has no live child${input.index === undefined ? "" : ` at index ${input.index}`}.`;
+		return {
+			content: [{ type: "text", text: reason }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
+	try {
+		writeSteerRequestToDir(child.steerInboxDir, {
+			type: "steer",
+			id: randomUUID(),
+			ts: Date.now(),
+			message: input.message,
+			targetIndex: child.index,
+			source: "steer-action",
+		});
+		if (control) control.updatedAt = Date.now();
+		return {
+			content: [{ type: "text", text: `Steering queued for foreground run ${input.runId} child ${child.index}.` }],
+			details: { mode: "management", results: [] },
+		};
+	} catch (error) {
+		return {
+			content: [{ type: "text", text: `Failed to steer foreground run ${input.runId}: ${error instanceof Error ? error.message : String(error)}` }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
 }

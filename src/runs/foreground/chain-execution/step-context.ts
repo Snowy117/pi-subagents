@@ -2,7 +2,7 @@
 
 import type { AgentConfig } from "../../../agents/agents.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { AgentProgress, ArtifactPaths, ChainOutputMap, SingleResult } from "../../../shared/types.ts";
+import type { AgentProgress, ArtifactPaths, ChainOutputMap, SingleResult, SubagentState } from "../../../shared/types.ts";
 import type { IntercomEventBus } from "../../../shared/types.ts";
 import type { ModelInfo } from "../../../shared/model-info.ts";
 import type { ResolvedTemplates } from "../../../shared/settings.ts";
@@ -36,6 +36,7 @@ export interface ChainStepEnv {
 	childIntercomTarget?: ChainExecutionParams["childIntercomTarget"];
 	orchestratorIntercomTarget?: ChainExecutionParams["orchestratorIntercomTarget"];
 	foregroundControl?: ChainExecutionParams["foregroundControl"];
+	foregroundLiveChildren?: SubagentState["foregroundLiveChildren"];
 	modelScope?: ChainExecutionParams["modelScope"];
 	chainSkills: string[];
 	results: SingleResult[];

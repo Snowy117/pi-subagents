@@ -60,6 +60,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		childIntercomTarget,
 		orchestratorIntercomTarget,
 		foregroundControl,
+		foregroundLiveChildren,
 		intercomEvents,
 		chainSkills: chainSkillsParam,
 		chainDir: chainDirBase,
@@ -216,7 +217,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	const deadlineAt = params.deadlineAt ?? (params.timeoutMs !== undefined ? Date.now() + params.timeoutMs : undefined);
 	const globalSemaphore = new Semaphore(params.globalConcurrencyLimit ?? DEFAULT_GLOBAL_CONCURRENCY_LIMIT);
 	const loop: ChainLoopState = { prev: "", globalTaskIndex: 0, progressCreated: false };
-	const c: ChainStepEnv = { params, chainSteps, agents, ctx, intercomEvents, signal, runId, cwd, shareEnabled, sessionDirForIndex, sessionFileForIndex, sessionFileForTask, thinkingOverrideForTask, artifactsDir, artifactConfig, includeProgress, onUpdate, onControlEvent, controlConfig, onDetachedExit, childIntercomTarget, orchestratorIntercomTarget, foregroundControl, modelScope, chainSkills, results, outputs, dynamicChildren, dynamicGroupStatuses, allProgress, allArtifactPaths, chainAgents, totalSteps, makeDetailsInput, originalTask, chainDir, templates, tuiBehaviorOverrides, availableModels, deadlineAt, globalSemaphore };
+	const c: ChainStepEnv = { params, chainSteps, agents, ctx, intercomEvents, signal, runId, cwd, shareEnabled, sessionDirForIndex, sessionFileForIndex, sessionFileForTask, thinkingOverrideForTask, artifactsDir, artifactConfig, includeProgress, onUpdate, onControlEvent, controlConfig, onDetachedExit, childIntercomTarget, orchestratorIntercomTarget, foregroundControl, foregroundLiveChildren, modelScope, chainSkills, results, outputs, dynamicChildren, dynamicGroupStatuses, allProgress, allArtifactPaths, chainAgents, totalSteps, makeDetailsInput, originalTask, chainDir, templates, tuiBehaviorOverrides, availableModels, deadlineAt, globalSemaphore };
 
 	for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
 		const step = chainSteps[stepIndex]!;

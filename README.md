@@ -189,6 +189,30 @@ To keep subagents inside a budget or compliance profile, enforce a model scope. 
 
 Foreground runs stream progress in the conversation while they run.
 
+### Interactive subagent view and steering
+
+Pi 0.82.1 or newer is required for the interactive view. While a foreground or background (async) child is active, run `/subagents` to open the child picker. With an empty main editor, you can also press `Down`; disable that convenience shortcut in `~/.pi/agent/extensions/subagent/config.json` if it conflicts with another terminal-input listener:
+
+```json
+{
+  "tui": {
+    "openSubagentsOnDown": false
+  }
+}
+```
+
+The slash command is the reliable fallback when another plugin's terminal listener consumes `Down`. Selecting a child opens a full chat overlay without switching or replacing the main Pi session. The view works for both async and foreground children, including runs with transcript artifacts disabled; it refreshes finalized user, assistant, and tool events, rather than token-by-token deltas.
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Send the input as a steer message to the selected child; it is queued for the next safe turn. |
+| `Shift+Tab` | Cycle the child's thinking level and show the applied level or rejection returned by the child. |
+| `PgUp` / `PgDn` | Scroll the child transcript. |
+| `Tab` | Move focus between transcript scrolling and the input. |
+| `Esc` | Return to the child picker; press `Esc` again to return to the main conversation. |
+
+If you submit `/xxx` in the overlay, the overlay closes and `/xxx` is placed in the main editor. Press `Enter` there to let Pi or another plugin's normal slash-command system handle it; slash commands are not forwarded to the child.
+
 Background runs keep working after control returns to you. Inspect active runs with `subagent({ action: "status" })`, or a specific run with `subagent({ action: "status", id: "..." })`. For a read-only fleet view across active foreground and background work, use `/subagents-fleet` or `subagent({ action: "status", view: "fleet" })`. To inspect what a background child is saying without hunting through artifact directories, tail its live transcript with `subagent({ action: "status", id: "...", view: "transcript" })`; add `index` for a specific child in a parallel or chain run.
 
 They also show a compact async widget and send completion notifications. Parallel background runs show per-agent progress instead of fake chain steps. Chains with parallel groups keep their grouped shape in progress and results, so failed or paused agents stay visible next to completed ones. When a child is explicitly allowed to fan out with `tools: subagent`, its nested runs appear under that parent child in the main status tree instead of being hidden inside the child process.

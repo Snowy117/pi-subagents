@@ -207,6 +207,7 @@ export async function runParallelChainTasks(input: ParallelChainRunInput): Promi
 				structuredOutput: structuredRuntime,
 				acceptance: task.acceptance,
 				acceptanceContext: { mode: "chain" },
+				foregroundLiveChildren: input.foregroundLiveChildren,
 				timeoutMs: input.timeoutMs,
 				deadlineAt: input.deadlineAt,
 				turnBudget: input.turnBudget,

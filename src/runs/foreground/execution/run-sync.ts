@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import type { AgentConfig } from "../../../agents/agents.ts";
 import { ensureArtifactsDir, getArtifactPaths, writeArtifact, writeMetadata } from "../../../shared/artifacts.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../../shared/child-transcript.ts";
+import { markLiveTranscriptTerminal, resolveLiveTranscriptPath } from "../../../shared/live-transcript.ts";
 import { type ArtifactPaths, type ModelAttempt, type RunSyncOptions, type SingleResult, DEFAULT_MAX_OUTPUT, truncateOutput } from "../../../shared/types.ts";
 import { detectSubagentError, findLatestSessionFile, getFinalOutput } from "../../../shared/utils.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../../../agents/skills.ts";
@@ -113,17 +114,25 @@ export async function runSync(
 		if (options.artifactConfig?.includeJsonl !== false) {
 			jsonlPath = artifactPathsResult.jsonlPath;
 		}
-		if (options.artifactConfig?.includeTranscript !== false) {
-			transcriptWriter = createChildTranscriptWriter({
-				transcriptPath: artifactPathsResult.transcriptPath,
-				source: "foreground",
-				runId: options.runId,
-				agent: agentName,
-				childIndex: options.index,
-				cwd: options.cwd ?? runtimeCwd,
-			});
-			transcriptWriter.writeInitialUserMessage(taskWithAcceptance);
-		}
+	}
+	const persistentTranscriptPath = artifactPathsResult && options.artifactConfig?.includeTranscript !== false
+		? artifactPathsResult.transcriptPath
+		: undefined;
+	if (persistentTranscriptPath || options.runId?.trim()) {
+		const transcriptPath = resolveLiveTranscriptPath({
+			persistentPath: persistentTranscriptPath,
+			runId: options.runId,
+			index: options.index ?? 0,
+		});
+		transcriptWriter = createChildTranscriptWriter({
+			transcriptPath,
+			source: "foreground",
+			runId: options.runId,
+			agent: agentName,
+			childIndex: options.index,
+			cwd: options.cwd ?? runtimeCwd,
+		});
+		transcriptWriter.writeInitialUserMessage(taskWithAcceptance);
 	}
 
 	let lastResult: SingleResult | undefined;
@@ -194,7 +203,8 @@ export async function runSync(
 		}
 	}
 
-	if (transcriptWriter) result.transcriptPath = artifactPathsResult?.transcriptPath;
+	if (persistentTranscriptPath) result.transcriptPath = persistentTranscriptPath;
+	else result.transcriptPath = undefined;
 	if (transcriptWriter?.getError()) result.transcriptError = transcriptWriter.getError();
 
 	if (artifactPathsResult && options.artifactConfig?.enabled !== false) {
@@ -215,7 +225,7 @@ export async function runSync(
 				durationMs: result.progressSummary?.durationMs,
 				toolCount: result.progressSummary?.toolCount,
 				error: result.error,
-				...(transcriptWriter ? { transcriptPath: artifactPathsResult.transcriptPath } : {}),
+				...(transcriptWriter && options.artifactConfig?.includeTranscript !== false ? { transcriptPath: artifactPathsResult.transcriptPath } : {}),
 				transcriptError: result.transcriptError,
 				skills: result.skills,
 				skillsWarning: result.skillsWarning,
@@ -263,5 +273,6 @@ export async function runSync(
 		}
 	}
 
+	if (!result.detached) markLiveTranscriptTerminal(transcriptWriter?.path);
 	return result;
 }

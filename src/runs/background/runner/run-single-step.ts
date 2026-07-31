@@ -76,16 +76,16 @@ export async function runSingleStep(
 		if (ctx.artifactConfig?.includeInput !== false) {
 			fs.writeFileSync(artifactPaths.inputPath, `# Task for ${step.agent}\n\n${task}`, "utf-8");
 		}
-		if (ctx.artifactConfig?.includeTranscript !== false) {
-			transcriptWriter = createChildTranscriptWriter({
-				transcriptPath: artifactPaths.transcriptPath,
-				source: "async",
-				runId: ctx.id,
-				agent: step.agent,
-				childIndex: ctx.flatIndex,
-				cwd: step.cwd ?? ctx.cwd,
-			});
-		}
+	}
+	if (ctx.transcriptPath) {
+		transcriptWriter = createChildTranscriptWriter({
+			transcriptPath: ctx.transcriptPath,
+			source: "async",
+			runId: ctx.id,
+			agent: step.agent,
+			childIndex: ctx.flatIndex,
+			cwd: step.cwd ?? ctx.cwd,
+		});
 	}
 	transcriptWriter?.writeInitialUserMessage(task);
 

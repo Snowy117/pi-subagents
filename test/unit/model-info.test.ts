@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { findModelInfo, getSupportedThinkingLevels, type ModelInfo } from "../../src/shared/model-info.ts";
+import {
+	findModelInfo,
+	getSupportedThinkingLevels,
+	resolveEffectiveThinking,
+	splitKnownThinkingSuffix,
+	type ModelInfo,
+} from "../../src/shared/model-info.ts";
 
 describe("model info helpers", () => {
 	const ambiguousModels: ModelInfo[] = [
@@ -20,18 +26,22 @@ describe("model info helpers", () => {
 		assert.equal(findModelInfo("openai/gpt-5-mini:high", ambiguousModels, "github-copilot")?.fullId, "openai/gpt-5-mini");
 	});
 
-	it("keeps the legacy full thinking list for reasoning models without per-level metadata", () => {
+	it("uses Pi's standard levels when reasoning metadata has no per-level map", () => {
 		assert.deepEqual(
 			getSupportedThinkingLevels({ provider: "openai", id: "gpt-5", fullId: "openai/gpt-5", reasoning: true }),
-			["off", "minimal", "low", "medium", "high", "xhigh"],
+			["off", "minimal", "low", "medium", "high"],
 		);
 	});
 
-	it("keeps the legacy full thinking list when older model metadata omits reasoning", () => {
+	it("keeps the standard compatibility list when older model metadata omits reasoning", () => {
 		assert.deepEqual(
 			getSupportedThinkingLevels({ provider: "openai", id: "gpt-5", fullId: "openai/gpt-5" }),
-			["off", "minimal", "low", "medium", "high", "xhigh"],
+			["off", "minimal", "low", "medium", "high"],
 		);
+	});
+
+	it("does not assume xhigh or max support when model metadata is unavailable", () => {
+		assert.deepEqual(getSupportedThinkingLevels(undefined), ["off", "minimal", "low", "medium", "high"]);
 	});
 
 	it("filters levels only when per-level metadata is present", () => {
@@ -58,5 +68,26 @@ describe("model info helpers", () => {
 			}),
 			["high"],
 		);
+	});
+
+	it("includes max only when the model maps it explicitly", () => {
+		assert.deepEqual(
+			getSupportedThinkingLevels({
+				provider: "openai",
+				id: "gpt-5-pro",
+				fullId: "openai/gpt-5-pro",
+				reasoning: true,
+				thinkingLevelMap: { high: "high", max: "max" },
+			}),
+			["off", "minimal", "low", "medium", "high", "max"],
+		);
+	});
+
+	it("recognizes max as a model suffix and effective thinking level", () => {
+		assert.deepEqual(splitKnownThinkingSuffix("openai/gpt-5-pro:max"), {
+			baseModel: "openai/gpt-5-pro",
+			thinkingSuffix: ":max",
+		});
+		assert.equal(resolveEffectiveThinking("openai/gpt-5-pro:max", undefined), "max");
 	});
 });

@@ -167,6 +167,7 @@ export async function executeSequentialStep(c: ChainStepEnv, loop: ChainLoopStat
 				structuredOutput: structuredRuntime,
 				acceptance: seqStep.acceptance,
 				acceptanceContext: { mode: "chain" },
+				foregroundLiveChildren: c.foregroundLiveChildren,
 				timeoutMs: params.timeoutMs,
 				deadlineAt,
 				turnBudget: params.turnBudget,

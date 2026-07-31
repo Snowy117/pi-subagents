@@ -32,6 +32,9 @@ export interface AsyncRunStepSummary {
 	thinking?: string;
 	attemptedModels?: string[];
 	error?: string;
+	sessionFile?: string;
+	transcriptPath?: string;
+	transcriptError?: string;
 	timedOut?: boolean;
 	turnBudget?: TurnBudgetState;
 	turnBudgetExceeded?: boolean;
@@ -183,6 +186,9 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 			...(step.thinking ? { thinking: step.thinking } : {}),
 			...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 			...(step.error ? { error: step.error } : {}),
+			...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
+			...(step.transcriptPath ? { transcriptPath: step.transcriptPath } : {}),
+			...(step.transcriptError ? { transcriptError: step.transcriptError } : {}),
 			...(step.timedOut !== undefined ? { timedOut: step.timedOut } : {}),
 			...(step.turnBudget ? { turnBudget: step.turnBudget } : {}),
 			...(step.turnBudgetExceeded !== undefined ? { turnBudgetExceeded: step.turnBudgetExceeded } : {}),

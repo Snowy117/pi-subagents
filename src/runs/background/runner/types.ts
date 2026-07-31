@@ -149,6 +149,7 @@ export interface SingleStepContext {
 	flatStepCount: number;
 	outputFile: string;
 	steerInboxDir?: string;
+	actionControlDir?: string;
 	transcriptPath?: string;
 	piPackageRoot?: string;
 	piArgv1?: string;

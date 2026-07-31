@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { renderWidget, widgetRenderKey } from "../../../tui/render.ts";
 import {
@@ -13,6 +14,7 @@ import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "../stale-run
 import { hasLiveNestedDescendants, updateAsyncJobNestedProjection } from "../../shared/nested-events.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "../async-status.ts";
 import { type AsyncJobTrackerOptions, emitNewControlEvents, summaryToJob } from "./helpers.ts";
+import { cleanupForegroundLiveChildren } from "../../foreground/foreground-live-registry.ts";
 
 export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, asyncDirRoot: string, options: AsyncJobTrackerOptions = {}): {
 	ensurePoller: () => void;
@@ -189,6 +191,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
 			asyncDir,
+			cwd: info.cwd,
 			status: "queued",
 			pid: typeof info.pid === "number" ? info.pid : undefined,
 			...(typeof info.sessionId === "string" ? { sessionId: info.sessionId } : {}),
@@ -244,6 +247,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		state.cleanupTimers.clear();
 		state.asyncJobs.clear();
 		state.foregroundControls?.clear();
+		if (state.foregroundLiveChildren) cleanupForegroundLiveChildren(state.foregroundLiveChildren, fs);
 		state.lastForegroundControlId = null;
 		state.resultFileCoalescer.clear();
 		if (ctx?.hasUI) {

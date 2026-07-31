@@ -19,6 +19,7 @@ function stateWithForeground(id: string): SubagentState {
 		currentSessionId: null,
 		asyncJobs: new Map(),
 		foregroundRuns: new Map(),
+		foregroundLiveChildren: new Map(),
 		foregroundControls: new Map([[id, { runId: id, mode: "single", startedAt: 1, updatedAt: 1 }]]),
 		lastForegroundControlId: id,
 		pendingForegroundControlNotices: new Map(),
@@ -56,6 +57,30 @@ function stateWithNestedRoute(route: ReturnType<typeof createNestedRoute>): Suba
 }
 
 describe("subagent run id resolver", () => {
+	it("keeps legacy state fixtures without a live child registry compatible", () => {
+		const state = stateWithForeground("legacy-run") as SubagentState & { foregroundLiveChildren?: SubagentState["foregroundLiveChildren"] };
+		delete state.foregroundLiveChildren;
+		assert.deepEqual(resolveSubagentRunId("legacy-run", { state }), { kind: "foreground", id: "legacy-run" });
+	});
+
+	it("resolves an exact or prefixed foreground id from the live child registry", () => {
+		const state = stateWithForeground("other-run");
+		state.foregroundControls.clear();
+		state.foregroundRuns?.clear();
+		state.foregroundLiveChildren.set("detached-live-run:0", {
+			runId: "detached-live-run",
+			index: 0,
+			agent: "worker",
+			status: "running",
+			controlRoot: "/tmp/control",
+			steerInboxDir: "/tmp/steer",
+			actionControlDir: "/tmp/action",
+			updatedAt: 1,
+		});
+		assert.deepEqual(resolveSubagentRunId("detached-live-run", { state }), { kind: "foreground", id: "detached-live-run" });
+		assert.deepEqual(resolveSubagentRunId("detached-live", { state }), { kind: "foreground", id: "detached-live-run" });
+	});
+
 	it("prefers exact foreground, then exact async, then exact nested before prefix matches", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-id-resolver-"));
 		try {

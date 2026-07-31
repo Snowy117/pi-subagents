@@ -1,10 +1,21 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionConfig } from "../shared/types.ts";
+import { writeAtomicJson } from "../shared/atomic-json.ts";
+import type { ExtensionConfig, TuiConfig } from "../shared/types.ts";
 import { getAgentDir } from "../shared/utils.ts";
 
 export function getConfigPath(): string {
 	return path.join(getAgentDir(), "extensions", "subagent", "config.json");
+}
+
+export const DEFAULT_TUI_CONFIG: TuiConfig = { openSubagentsOnDown: true };
+
+export function resolveTuiConfig(config: ExtensionConfig): TuiConfig {
+	return {
+		openSubagentsOnDown: typeof config.tui?.openSubagentsOnDown === "boolean"
+			? config.tui.openSubagentsOnDown
+			: DEFAULT_TUI_CONFIG.openSubagentsOnDown,
+	};
 }
 
 function readConfigForUpdate(configPath = getConfigPath()): ExtensionConfig {
@@ -17,8 +28,7 @@ function readConfigForUpdate(configPath = getConfigPath()): ExtensionConfig {
 }
 
 export function saveConfig(config: ExtensionConfig, configPath = getConfigPath()): void {
-	fs.mkdirSync(path.dirname(configPath), { recursive: true });
-	fs.writeFileSync(configPath, `${JSON.stringify(config, null, "\t")}\n`, "utf-8");
+	writeAtomicJson(configPath, config);
 }
 
 export function updateConfig(updater: (config: ExtensionConfig) => ExtensionConfig): ExtensionConfig {

@@ -8,17 +8,17 @@ import {
 	type FauxContentBlock,
 	type FauxResponseStep,
 	fauxAssistantMessage,
+	fauxProvider,
 	fauxText,
 	fauxToolCall,
-	registerFauxProvider,
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
-	type ModelRegistry,
 	createAgentSession,
 	DefaultResourceLoader,
+	ModelRuntime,
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -34,6 +34,8 @@ export interface RealSessionRunOptions {
 	childText: string;
 	respond: FauxResponder;
 	timeoutMs?: number;
+	interactiveChildControl?: boolean;
+	duringPrompt?: (input: { cwd: string; home: string }) => Promise<void>;
 }
 
 export interface RealSessionRun {
@@ -98,24 +100,12 @@ function toAssistantMessage(reply: FauxReply): AssistantMessage {
 	return fauxAssistantMessage(content, { stopReason: hasToolCall ? "toolUse" : "stop" });
 }
 
-function createModelRegistry(model: { provider: string; id: string }) {
-	return {
-		find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
-		getAll: () => [model],
-		getAvailable: () => [model],
-		hasConfiguredAuth: () => true,
-		isUsingOAuth: () => false,
-		getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "faux", headers: {} }),
-		registerProvider: () => {},
-		unregisterProvider: () => {},
-	};
-}
-
-function installChildPiShim(childText: string): () => void {
+function installChildPiShim(childText: string, interactiveChildControl = false): () => void {
 	const rootDir = mkdtempSync(path.join(os.tmpdir(), "pi-real-session-cli-"));
 	const binDir = path.join(rootDir, "bin");
 	const previousPath = process.env.PATH;
 	const previousChildText = process.env.PI_SUBAGENTS_E2E_CHILD_TEXT;
+	const previousInteractiveControl = process.env.PI_SUBAGENTS_E2E_INTERACTIVE_CONTROL;
 	const previousArgv1 = process.argv[1];
 
 	writeFileSync(path.join(rootDir, ".keep"), "");
@@ -132,6 +122,8 @@ function installChildPiShim(childText: string): () => void {
 
 	process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
 	process.env.PI_SUBAGENTS_E2E_CHILD_TEXT = childText;
+	if (interactiveChildControl) process.env.PI_SUBAGENTS_E2E_INTERACTIVE_CONTROL = "1";
+	else delete process.env.PI_SUBAGENTS_E2E_INTERACTIVE_CONTROL;
 	if (process.platform === "win32") process.argv[1] = CHILD_CLI_PATH;
 
 	return () => {
@@ -139,6 +131,8 @@ function installChildPiShim(childText: string): () => void {
 		else process.env.PATH = previousPath;
 		if (previousChildText === undefined) delete process.env.PI_SUBAGENTS_E2E_CHILD_TEXT;
 		else process.env.PI_SUBAGENTS_E2E_CHILD_TEXT = previousChildText;
+		if (previousInteractiveControl === undefined) delete process.env.PI_SUBAGENTS_E2E_INTERACTIVE_CONTROL;
+		else process.env.PI_SUBAGENTS_E2E_INTERACTIVE_CONTROL = previousInteractiveControl;
 		if (process.platform === "win32") {
 			if (previousArgv1 === undefined) delete process.argv[1];
 			else process.argv[1] = previousArgv1;
@@ -173,9 +167,8 @@ export async function runRealSubagentSession(options: RealSessionRunOptions): Pr
 		["PI_SUBAGENT_PI_BINARY", process.env.PI_SUBAGENT_PI_BINARY],
 		["PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT", process.env.PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT],
 	]);
-	const uninstallChildPi = installChildPiShim(options.childText);
+	const uninstallChildPi = installChildPiShim(options.childText, options.interactiveChildControl);
 	let session: AgentSession | undefined;
-	let faux: ReturnType<typeof registerFauxProvider> | undefined;
 	let disposed = false;
 
 	const dispose = async () => {
@@ -187,7 +180,6 @@ export async function runRealSubagentSession(options: RealSessionRunOptions): Pr
 		try {
 			session?.dispose();
 		} catch {}
-		faux?.unregister();
 		uninstallChildPi();
 		restoreEnv(envSnapshot);
 		try {
@@ -211,11 +203,13 @@ export async function runRealSubagentSession(options: RealSessionRunOptions): Pr
 		delete process.env.PI_SUBAGENT_PI_BINARY;
 		delete process.env.PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT;
 
-		faux = registerFauxProvider({
+		const faux = fauxProvider({
 			provider: "faux-e2e-parent",
 			models: [{ id: "parent", contextWindow: 200_000 }],
 		});
 		const model = faux.getModel();
+		const modelRuntime = await ModelRuntime.create({ authPath: path.join(home, "auth.json"), modelsPath: null });
+		modelRuntime.registerNativeProvider(faux.provider);
 		const respond = options.respond;
 		const responseFactory: FauxResponseStep = async (context, _streamOptions, state) => toAssistantMessage(await respond(context, state));
 		faux.setResponses(Array.from({ length: 8 }, () => responseFactory));
@@ -241,7 +235,7 @@ export async function runRealSubagentSession(options: RealSessionRunOptions): Pr
 			cwd,
 			agentDir: home,
 			model,
-			modelRegistry: createModelRegistry(model) as unknown as ModelRegistry,
+			modelRuntime,
 			resourceLoader: loader,
 			sessionManager: SessionManager.create(cwd, path.join(home, "sessions")),
 			settingsManager,
@@ -261,8 +255,10 @@ export async function runRealSubagentSession(options: RealSessionRunOptions): Pr
 		const timeoutMs = options.timeoutMs ?? 30_000;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
+			const prompt = session.prompt(options.prompt, { expandPromptTemplates: false });
+			const exerciseRuntime = options.duringPrompt?.({ cwd, home }) ?? Promise.resolve();
 			await Promise.race([
-				session.prompt(options.prompt, { expandPromptTemplates: false }),
+				Promise.all([prompt, exerciseRuntime]),
 				new Promise<never>((_, reject) => {
 					timer = setTimeout(() => reject(new Error(`real-session E2E timed out after ${timeoutMs}ms`)), timeoutMs);
 				}),

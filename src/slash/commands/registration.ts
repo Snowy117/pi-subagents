@@ -6,10 +6,12 @@ import { sendSlashText } from "./slash-helpers.ts";
 import { buildSubagentCostReport } from "./usage-report.ts";
 import { registerExecutionCommands } from "./execution-commands.ts";
 import { registerProfileCommands } from "./profile-commands.ts";
+import type { SteerViewController } from "../../tui/steer-view/open-view.ts";
 
 export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
+	steerView?: SteerViewController,
 ): void {
 	registerExecutionCommands(pi, state);
 
@@ -31,6 +33,14 @@ export function registerSlashCommands(
 		description: "Show active subagent fleet status and transcript commands",
 		handler: async (_args, ctx) => {
 			await runSlashSubagent(pi, ctx, { action: "status", view: "fleet" });
+		},
+	});
+
+	pi.registerCommand("subagents", {
+		description: "Open the interactive subagent child viewer",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI) return;
+			await steerView?.open(ctx);
 		},
 	});
 

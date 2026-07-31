@@ -33,6 +33,8 @@ interface ChildTranscriptWriterInput {
 	maxBytes?: number;
 }
 
+type ChildTranscriptFs = Pick<typeof fs, "appendFileSync" | "mkdirSync" | "writeFileSync">;
+
 export interface ChildTranscriptWriter {
 	path: string;
 	writeInitialUserMessage(prompt: string): void;
@@ -73,7 +75,7 @@ function eventArgs(event: ChildTranscriptEvent): Record<string, unknown> {
 		: {};
 }
 
-export function createChildTranscriptWriter(input: ChildTranscriptWriterInput): ChildTranscriptWriter {
+export function createChildTranscriptWriter(input: ChildTranscriptWriterInput, fsImpl: ChildTranscriptFs = fs): ChildTranscriptWriter {
 	let bytesWritten = 0;
 	let writeError: string | undefined;
 	let truncated = false;
@@ -104,7 +106,7 @@ export function createChildTranscriptWriter(input: ChildTranscriptWriterInput): 
 		const markerBytes = Buffer.byteLength(marker, "utf-8");
 		if (bytesWritten + markerBytes > maxBytes) return false;
 		try {
-			fs.appendFileSync(input.transcriptPath, marker, "utf-8");
+			fsImpl.appendFileSync(input.transcriptPath, marker, "utf-8");
 			bytesWritten += markerBytes;
 			return true;
 		} catch (error) {
@@ -131,7 +133,7 @@ export function createChildTranscriptWriter(input: ChildTranscriptWriterInput): 
 			return;
 		}
 		try {
-			fs.appendFileSync(input.transcriptPath, line, "utf-8");
+			fsImpl.appendFileSync(input.transcriptPath, line, "utf-8");
 			bytesWritten += bytes;
 		} catch (error) {
 			writeError = `Failed to write child transcript '${input.transcriptPath}': ${errorMessage(error)}`;
@@ -139,8 +141,8 @@ export function createChildTranscriptWriter(input: ChildTranscriptWriterInput): 
 	};
 
 	try {
-		fs.mkdirSync(path.dirname(input.transcriptPath), { recursive: true });
-		fs.writeFileSync(input.transcriptPath, "", "utf-8");
+		fsImpl.mkdirSync(path.dirname(input.transcriptPath), { recursive: true });
+		fsImpl.writeFileSync(input.transcriptPath, "", "utf-8");
 	} catch (error) {
 		writeError = `Failed to initialize child transcript '${input.transcriptPath}': ${errorMessage(error)}`;
 	}

@@ -84,6 +84,7 @@ export async function runForegroundParallelTasks(input: ForegroundParallelRunInp
 			skills: effectiveSkills === false ? [] : effectiveSkills,
 			acceptance: task.acceptance,
 			acceptanceContext: { mode: "parallel" },
+			foregroundLiveChildren: input.state.foregroundLiveChildren,
 			timeoutMs: input.timeoutMs,
 			deadlineAt: input.deadlineAt,
 			turnBudget: input.turnBudget,

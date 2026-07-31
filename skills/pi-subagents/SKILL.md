@@ -36,6 +36,7 @@ Humans often use the slash-command layer instead:
 - `/parallel` — launch top-level parallel tasks
 - `/run-chain` — launch a saved `.chain.md` or `.chain.json` workflow
 - `/subagent-cost` — show parent plus child token usage and cost for the session
+- `/subagents` — open the Pi 0.82.1+ interactive foreground/async child picker and chat overlay; `Enter` steers, `Shift+Tab` cycles child thinking, and `Esc` returns
 - `/subagents-fleet` — show the read-only active foreground/background fleet view
 - `/subagents-doctor` — diagnose setup, discovery, async paths, and intercom bridge state
 - `/subagents-models [agent]` — show the live runtime-loaded builtin model mapping
@@ -44,6 +45,12 @@ Humans often use the slash-command layer instead:
 
 Prefer the tool when you are writing agent logic. Prefer the slash commands when
 you are guiding a human through an interactive flow.
+
+In the main TUI, an empty editor also opens the picker on `Down` unless
+`tui.openSubagentsOnDown` is false. `/subagents` remains the reliable fallback
+when another plugin consumes terminal input. A `/xxx` entry in the child view is
+returned to the main editor for Pi or another plugin to handle; it is not sent
+to the child.
 
 Packaged prompt shortcuts are also available for repeatable workflows. Treat them as reusable orchestration recipes, not just human slash commands. When the user asks for one of these shapes, or when the workflow clearly fits, apply the same pattern directly with `subagent(...)` and other tools:
 - `/parallel-review` — fresh-context reviewers with distinct review angles, then synthesis

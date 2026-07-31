@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { writeAtomicJson } from "../../../shared/atomic-json.ts";
 import { getArtifactPaths } from "../../../shared/artifacts.ts";
+import { resolveLiveTranscriptPath } from "../../../shared/live-transcript.ts";
 import { writeInitialProgressFile } from "../../../shared/settings.ts";
 import { diffWorktrees, formatWorktreeDiffSummary, type WorktreeSetup } from "../../shared/worktree.ts";
 import type { ArtifactConfig } from "../../../shared/types.ts";
@@ -121,13 +122,17 @@ export function resolveAsyncStepTranscriptPath(input: {
 	agent: string;
 	flatIndex: number;
 	flatStepCount: number;
-}): string | undefined {
-	if (!input.artifactsDir || input.artifactConfig?.enabled === false || input.artifactConfig?.includeTranscript === false) return undefined;
-	return getArtifactPaths(
-		input.artifactsDir,
-		input.runId,
-		input.agent,
-		input.flatStepCount > 1 ? input.flatIndex : undefined,
-	).transcriptPath;
+}): string {
+	const persistentPath = input.artifactsDir
+		&& input.artifactConfig?.enabled !== false
+		&& input.artifactConfig?.includeTranscript !== false
+		? getArtifactPaths(
+			input.artifactsDir,
+			input.runId,
+			input.agent,
+			input.flatStepCount > 1 ? input.flatIndex : undefined,
+		).transcriptPath
+		: undefined;
+	return resolveLiveTranscriptPath({ persistentPath, runId: input.runId, index: input.flatIndex });
 }
 

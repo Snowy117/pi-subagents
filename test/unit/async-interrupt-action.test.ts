@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { consumeSteerRequests } from "../../src/runs/background/control-channel.ts";
 import { createSubagentExecutor } from "../../src/runs/foreground/subagent-executor.ts";
+import { steerForegroundRun } from "../../src/runs/foreground/executor/interrupt-steer.ts";
 import { ASYNC_DIR, RESULTS_DIR, type SubagentState } from "../../src/shared/types.ts";
 
 function createState(): SubagentState {
@@ -13,6 +14,7 @@ function createState(): SubagentState {
 		currentSessionId: null,
 		asyncJobs: new Map(),
 		foregroundRuns: new Map(),
+		foregroundLiveChildren: new Map(),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
 		pendingForegroundControlNotices: new Map(),
@@ -89,6 +91,57 @@ function text(result: Awaited<ReturnType<ReturnType<typeof executorWithKill>["ex
 }
 
 describe("async interrupt action", () => {
+	it("reports no live foreground child when a legacy state has no live registry", () => {
+		const state = createState() as SubagentState & { foregroundLiveChildren?: SubagentState["foregroundLiveChildren"] };
+		delete state.foregroundLiveChildren;
+		state.foregroundControls.set("legacy-run", { runId: "legacy-run", mode: "single", startedAt: 1, updatedAt: 1 });
+		const result = steerForegroundRun({ state, runId: "legacy-run", message: "continue" });
+		assert.equal(result.isError, true);
+		assert.match(text(result), /no live child/i);
+	});
+
+	it("writes steering directly to the selected live foreground child", async () => {
+		const state = createState();
+		const runId = `foreground-steer-${Date.now().toString(36)}`;
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "foreground-steer-"));
+		const controlRoot = path.join(root, "control");
+		const inbox = path.join(controlRoot, "steer-targets", "1");
+		state.foregroundControls.set(runId, { runId, mode: "parallel", startedAt: 1, updatedAt: 1 });
+		state.foregroundLiveChildren.set(`${runId}:0`, { runId, index: 0, agent: "worker-a", status: "running", controlRoot, steerInboxDir: path.join(controlRoot, "steer-targets", "0"), actionControlDir: path.join(controlRoot, "action-targets", "0"), updatedAt: 1 });
+		state.foregroundLiveChildren.set(`${runId}:1`, { runId, index: 1, agent: "worker-b", status: "running", controlRoot, steerInboxDir: inbox, actionControlDir: path.join(controlRoot, "action-targets", "1"), updatedAt: 1 });
+		try {
+			const result = await executorWithKill(state, () => true)
+				.execute("steer", { action: "steer", id: runId, index: 1, message: "Focus on validation." }, new AbortController().signal, undefined, ctx());
+			assert.equal(result.isError, undefined);
+			assert.match(text(result), /foreground run .* child 1/i);
+			const files = fs.readdirSync(inbox);
+			assert.equal(files.length, 1);
+			assert.equal(JSON.parse(fs.readFileSync(path.join(inbox, files[0]!), "utf-8")).message, "Focus on validation.");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("steers a detached foreground child from the live registry after its foreground control is gone", async () => {
+		const state = createState();
+		const runId = `foreground-detached-steer-${Date.now().toString(36)}`;
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "foreground-detached-steer-"));
+		const controlRoot = path.join(root, "control");
+		const inbox = path.join(controlRoot, "steer-targets", "0");
+		state.foregroundRuns?.set(runId, { runId, mode: "single", cwd: root, updatedAt: 1, children: [] });
+		state.foregroundLiveChildren.set(`${runId}:0`, { runId, index: 0, agent: "worker", status: "running", controlRoot, steerInboxDir: inbox, actionControlDir: path.join(controlRoot, "action-targets", "0"), updatedAt: 1 });
+		try {
+			const result = await executorWithKill(state, () => true)
+				.execute("steer", { action: "steer", id: runId, message: "Continue after the reply." }, new AbortController().signal, undefined, ctx());
+			assert.equal(result.isError, undefined);
+			const files = fs.readdirSync(inbox);
+			assert.equal(files.length, 1);
+			assert.equal(JSON.parse(fs.readFileSync(path.join(inbox, files[0]!), "utf-8")).message, "Continue after the reply.");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("queues steering for a running async child", async () => {
 		const state = createState();
 		const runId = `steer-disk-${Date.now().toString(36)}`;

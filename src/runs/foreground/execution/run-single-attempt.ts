@@ -15,9 +15,10 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, rmSync, unlinkSync } from "node:fs";
 import type { AgentConfig } from "../../../agents/agents.ts";
 import { createJsonlWriter } from "../../../shared/jsonl-writer.ts";
+import { LIVE_TRANSCRIPTS_DIR, isRuntimeLiveTranscript, markLiveTranscriptTerminal } from "../../../shared/live-transcript.ts";
 import { attachPostExitStdioGuard } from "../../../shared/post-exit-stdio-guard.ts";
 import {
 	type AgentProgress,
@@ -27,9 +28,15 @@ import {
 } from "../../../shared/types.ts";
 import { DEFAULT_CONTROL_CONFIG } from "../../shared/subagent-control.ts";
 import { applyThinkingSuffix, buildPiArgs } from "../../shared/pi-args.ts";
+import { actionTargetDir, foregroundControlRoot, foregroundSteerInboxDir } from "../../shared/control-actions/paths.ts";
 import { appendTurnBudgetSystemPrompt, initialTurnBudgetState } from "../../shared/turn-budget.ts";
 import { initialToolBudgetState } from "../../shared/tool-budget.ts";
 import { getPiSpawnCommand } from "../../shared/pi-spawn.ts";
+import {
+	foregroundLiveChildKey,
+	registerForegroundLiveChild,
+	removeForegroundLiveChild,
+} from "../foreground-live-registry.ts";
 import {
 	emptyUsage,
 	resolveAttemptTimeout,
@@ -61,6 +68,26 @@ export async function runSingleAttempt(
 ): Promise<SingleResult> {
 	const effectiveThinking = options.thinkingOverride ?? agent.thinking;
 	const modelArg = applyThinkingSuffix(model, effectiveThinking, options.thinkingOverride !== undefined);
+	const index = options.index ?? 0;
+	const hasRunId = typeof options.runId === "string" && options.runId.trim().length > 0;
+	const controlRoot = hasRunId ? foregroundControlRoot(options.runId) : undefined;
+	const steerInboxDir = hasRunId ? foregroundSteerInboxDir(options.runId, index) : undefined;
+	const actionControlDir = controlRoot ? actionTargetDir(controlRoot, index) : undefined;
+	const liveChildren = options.foregroundLiveChildren;
+	const liveChildKey = hasRunId ? foregroundLiveChildKey(options.runId, index) : undefined;
+	const removeLiveChild = (status: "completed" | "failed"): void => {
+		if (hasRunId && liveChildren) {
+			removeForegroundLiveChild(liveChildren, options.runId, index, status, { rmSync });
+		}
+	};
+	const stateOptions: RunSyncOptions = {
+		...options,
+		onDetachedExit: (detachedResult) => {
+			markLiveTranscriptTerminal(shared.transcriptWriter?.path);
+			removeLiveChild(detachedResult.exitCode === 0 && !detachedResult.error ? "completed" : "failed");
+			options.onDetachedExit?.(detachedResult);
+		},
+	};
 	const { args, env: sharedEnv, tempDir } = buildPiArgs({
 		baseArgs: ["--mode", "json", "-p"],
 		task,
@@ -84,7 +111,7 @@ export async function runSingleAttempt(
 		orchestratorIntercomTarget: options.orchestratorIntercomTarget,
 		runId: options.runId,
 		childAgentName: agent.name,
-		childIndex: options.index ?? 0,
+		childIndex: index,
 		parentEventSink: options.nestedRoute?.eventSink,
 		parentControlInbox: options.nestedRoute?.controlInbox,
 		parentRootRunId: options.nestedRoute?.rootRunId,
@@ -92,6 +119,8 @@ export async function runSingleAttempt(
 		parentSessionId: options.parentSessionId,
 		structuredOutput: options.structuredOutput,
 		toolBudget: options.toolBudget,
+		steerInboxDir,
+		actionControlDir,
 	});
 
 	const result: SingleResult = {
@@ -102,7 +131,7 @@ export async function runSingleAttempt(
 		usage: emptyUsage(),
 		model: modelArg,
 		artifactPaths: shared.artifactPaths,
-		transcriptPath: shared.transcriptWriter ? shared.artifactPaths?.transcriptPath : undefined,
+		transcriptPath: shared.transcriptWriter?.path,
 		skills: shared.resolvedSkillNames,
 		skillsWarning: shared.skillsWarning,
 		...(options.turnBudget ? { turnBudget: initialTurnBudgetState(options.turnBudget) } : {}),
@@ -147,9 +176,27 @@ export async function runSingleAttempt(
 		return result;
 	}
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
+	if (liveChildren && liveChildKey && controlRoot && steerInboxDir && actionControlDir) {
+		registerForegroundLiveChild(liveChildren, {
+			runId: options.runId,
+			index,
+			agent: agent.name,
+			status: "running",
+			controlRoot,
+			steerInboxDir,
+			actionControlDir,
+			...(shared.transcriptWriter ? { transcriptPath: shared.transcriptWriter.path } : {}),
+			...(shared.transcriptWriter ? {
+				transcriptRoot: isRuntimeLiveTranscript(shared.transcriptWriter.path)
+					? LIVE_TRANSCRIPTS_DIR
+					: options.artifactsDir,
+			} : {}),
+			updatedAt: Date.now(),
+		});
+	}
 
 	const state = createSingleAttemptState({
-		options,
+		options: stateOptions,
 		agent,
 		shared,
 		runtimeCwd,
@@ -165,32 +212,46 @@ export async function runSingleAttempt(
 	state.result = result;
 	state.progress = progress;
 
-	const exitCode = await new Promise<number>((resolve) => {
-		const spawnSpec = getPiSpawnCommand(args);
-		const proc = spawn(spawnSpec.command, spawnSpec.args, {
-			cwd: options.cwd ?? runtimeCwd,
-			env: spawnEnv,
-			stdio: ["ignore", "pipe", "pipe"],
-			windowsHide: true,
+	let exitCode: number;
+	try {
+		exitCode = await new Promise<number>((resolve) => {
+			const spawnSpec = getPiSpawnCommand(args);
+			const proc = spawn(spawnSpec.command, spawnSpec.args, {
+				cwd: options.cwd ?? runtimeCwd,
+				env: spawnEnv,
+				stdio: ["ignore", "pipe", "pipe"],
+				windowsHide: true,
+			});
+			state.proc = proc;
+			state.jsonlWriter = createJsonlWriter(shared.jsonlPath, proc.stdout);
+			state.resolve = resolve;
+			// Wire extracted handlers onto the shared state object before any event
+			// can fire (the executor runs to completion synchronously first).
+			attachLifecycleHandlers(state);
+			attachControlHandlers(state);
+			attachBudgetHandlers(state);
+			attachEventHandlers(state);
+
+			// Registrations in the original order.
+			state.unsubscribeIntercomDetach = registerIntercomDetach(state);
+			if (controlConfig.enabled) startActivityTimer(state);
+			if (attemptTimeout) startTimeoutTimer(state);
+			state.clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
+			registerProcessHandlers(state);
+			registerSignalHandlers(state);
 		});
-		state.proc = proc;
-		state.jsonlWriter = createJsonlWriter(shared.jsonlPath, proc.stdout);
-		state.resolve = resolve;
-		// Wire extracted handlers onto the shared state object before any event
-		// can fire (the executor runs to completion synchronously first).
-		attachLifecycleHandlers(state);
-		attachControlHandlers(state);
-		attachBudgetHandlers(state);
-		attachEventHandlers(state);
+	} catch (error) {
+		removeLiveChild("failed");
+		throw error;
+	}
 
-		// Registrations in the original order.
-		state.unsubscribeIntercomDetach = registerIntercomDetach(state);
-		if (controlConfig.enabled) startActivityTimer(state);
-		if (attemptTimeout) startTimeoutTimer(state);
-		state.clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
-		registerProcessHandlers(state);
-		registerSignalHandlers(state);
-	});
-
-	return finalizeSingleAttempt(state, exitCode);
+	try {
+		const finalized = await finalizeSingleAttempt(state, exitCode);
+		if (finalized.detached) return finalized;
+		removeLiveChild(finalized.exitCode === 0 && !finalized.error ? "completed" : "failed");
+		return finalized;
+	} catch (error) {
+		removeLiveChild("failed");
+		throw error;
+	}
 }

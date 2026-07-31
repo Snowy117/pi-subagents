@@ -11,7 +11,6 @@
  * Config file: ~/.pi/agent/extensions/subagent/config.json
  *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
  */
-
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -51,9 +50,9 @@ import { registerMessageRenderers } from "./registration/message-renderers.ts";
 import { registerSubagentTools } from "./registration/tools.ts";
 import { createSubagentBridges } from "./registration/bridges.ts";
 import { ensureAccessibleDir, expandTilde, getSubagentSessionRoot, isStaleExtensionContextError } from "./registration/session-paths.ts";
+import { createSteerViewRuntime } from "../tui/steer-view/registration.ts";
 
 export { loadConfig } from "./config.ts";
-
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	if (process.env[SUBAGENT_CHILD_ENV] === "1") {
 		return;
@@ -86,6 +85,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		subagentSpawns: { sessionId: null, count: 0 },
 		asyncJobs: new Map(),
 		foregroundRuns: new Map(),
+		foregroundLiveChildren: new Map(),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
 		pendingForegroundControlNotices: new Map(),
@@ -100,6 +100,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			clear: () => {},
 		},
 	};
+	const steerView = createSteerViewRuntime(state, config);
 
 	const supervisorChannel = createNativeSupervisorChannel(pi, state);
 	const { startResultWatcher, primeExistingResults, stopResultWatcher } = createResultWatcher(
@@ -120,6 +121,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			clearInterval(state.poller);
 			state.poller = null;
 		}
+		steerView.dispose();
 	};
 	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
@@ -164,7 +166,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getActionableSupervisorRequests: supervisorChannel.getActionableRequests,
 	});
 
-	registerSlashCommands(pi, state);
+	registerSlashCommands(pi, state, steerView.controller);
 
 	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";
 	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
@@ -249,12 +251,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionState(ctx);
+		steerView.startSession(ctx);
 		rpcBridge.emitReady(ctx);
 		supervisorChannel.start();
 	});
 
 	pi.on("session_shutdown", () => {
 		delete process.env[SUBAGENT_PARENT_SESSION_ENV];
+		steerView.closeSession();
 		for (const unsubscribe of eventUnsubscribes) {
 			try {
 				unsubscribe();

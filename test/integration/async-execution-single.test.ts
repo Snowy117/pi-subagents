@@ -33,21 +33,17 @@ import type { AsyncExecutionResult, AsyncResultPayload, AsyncStatusPayload, Mock
 describe("async execution utilities — background single execution", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
-
 	before(() => {
 		mockPi = createMockPi();
 		mockPi.install();
 	});
-
 	after(() => {
 		mockPi.uninstall();
 	});
-
 	beforeEach(() => {
 		tempDir = createTempDir();
 		mockPi.reset();
 	});
-
 	afterEach(() => {
 		removeTempDir(tempDir);
 	});
@@ -102,7 +98,33 @@ describe("async execution utilities — background single execution", { skip: !a
 		assert.equal(statusPayload.steps?.[0]?.status, "complete");
 		assert.equal(statusPayload.steps?.[0]?.exitCode, 0);
 	});
-
+	it("writes a scoped structured live transcript when transcript artifacts are disabled", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ jsonl: [events.assistantMessage("Live transcript output")], keepAliveAfterFinalMessageMs: 750 });
+		const id = `async-live-transcript-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		executeAsyncSingle(id, {
+			agent: "worker", task: "Do work", agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeTranscript: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false, maxSubagentDepth: 2,
+		});
+		const statusPath = path.join(asyncDir, "status.json");
+		const deadline = Date.now() + 3000;
+		let statusPayload: AsyncStatusPayload | undefined;
+		while (Date.now() < deadline) {
+			if (fs.existsSync(statusPath)) {
+				statusPayload = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatusPayload;
+				if (statusPayload.steps?.[0]?.transcriptPath && fs.existsSync(statusPayload.steps[0].transcriptPath)
+					&& fs.readFileSync(statusPayload.steps[0].transcriptPath, "utf-8").includes("Live transcript output")) break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		const transcriptPath = statusPayload?.steps?.[0]?.transcriptPath;
+		assert.equal(transcriptPath, path.join(TEMP_ROOT_DIR, "live-transcripts", id, "0.jsonl"));
+		assert.match(fs.readFileSync(transcriptPath!, "utf-8"), /Live transcript output/);
+		await waitForAsyncResultFile(id);
+		assert.equal(fs.existsSync(transcriptPath!), false);
+	});
 	it("background runs keep provider errors failed when followed only by empty assistant output", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({
 			jsonl: [

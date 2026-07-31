@@ -2,13 +2,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerNativeSupervisorClient } from "../../../intercom/native-supervisor-channel.ts";
-import { consumeSteerRequestsFromDir, writeSteerRequestToDir, type SteerRequest } from "../../background/control-channel.ts";
+import { consumeSteerRequestsFromDir, steerDeliveryMarker, writeSteerRequestToDir, type SteerRequest } from "../../background/control-channel.ts";
 import { SUBAGENT_FANOUT_CHILD_ENV, SUBAGENT_STEER_INBOX_ENV } from "../pi-args.ts";
 import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateStructuredOutputValue } from "../structured-output.ts";
 import { TOOL_BUDGET_ENV, decodeToolBudgetEnv, shouldBlockToolForBudget, toolBudgetBlockedMessage, toolBudgetSoftNudge } from "../tool-budget.ts";
 import type { JsonSchemaObject, ResolvedToolBudget } from "../../../shared/types.ts";
 import { rewriteSubagentPrompt } from "./prompt-rewrite.ts";
 import { stripParentOnlySubagentMessages } from "./message-filter.ts";
+import { registerControlActionInbox } from "./control-action-inbox.ts";
 
 const SUBAGENT_INHERIT_PROJECT_CONTEXT_ENV = "PI_SUBAGENT_INHERIT_PROJECT_CONTEXT";
 const SUBAGENT_INHERIT_SKILLS_ENV = "PI_SUBAGENT_INHERIT_SKILLS";
@@ -23,6 +24,7 @@ function readBooleanEnv(name: string): boolean | undefined {
 export function formatSteerMessage(request: SteerRequest): string {
 	return [
 		"Mid-run steering from the parent orchestrator:",
+		steerDeliveryMarker(request.id),
 		"",
 		request.message,
 		"",
@@ -115,25 +117,30 @@ function registerSteeringInbox(pi: ExtensionAPI): void {
 		disposed = true;
 		try {
 			watcher?.close();
-		} catch {}
+		} catch {
+			// Watcher teardown is best effort during process shutdown.
+		}
 		if (interval) clearInterval(interval);
 	});
 }
 
 export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 	registerSteeringInbox(pi);
+	registerControlActionInbox(pi);
 	registerToolBudget(pi, decodeToolBudgetEnv(process.env[TOOL_BUDGET_ENV]));
 	let nativeSupervisorClientRegistered = false;
 	let nativeSupervisorFallbackRegistered = false;
 	const registerNativeSupervisorClientOnce = (): void => {
 		if (nativeSupervisorClientRegistered) return;
 		nativeSupervisorClientRegistered = true;
+		if (typeof pi.registerTool !== "function") return;
 		registerNativeSupervisorClient(pi, { includeIntercomFallback: false });
 	};
 	const registerNativeSupervisorFallbackOnce = (): void => {
 		registerNativeSupervisorClientOnce();
 		if (nativeSupervisorFallbackRegistered) return;
 		nativeSupervisorFallbackRegistered = true;
+		if (typeof pi.registerTool !== "function") return;
 		registerNativeSupervisorClient(pi);
 	};
 	const onRuntimeEvent = pi.on as unknown as (event: string, handler: (event: unknown) => unknown) => void;

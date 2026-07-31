@@ -6,6 +6,8 @@ import { clearPendingForegroundControlNotices } from "../../../extension/control
 import { type Details } from "../../../shared/types.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as fs from "node:fs";
+import { cleanupForegroundRunRoot } from "../foreground-live-registry.ts";
 import { dispatchAction } from "./action-dispatch.ts";
 import { runAsyncPath } from "./async-path.ts";
 import { runChainPath } from "./chain-path.ts";
@@ -37,6 +39,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	): Promise<AgentToolResult<Details>> => {
 		deps.state.baseCwd = ctx.cwd;
 		deps.state.foregroundRuns ??= new Map();
+		deps.state.foregroundLiveChildren ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
 		const requestParams = omitExecutionModeActionAlias(params);
@@ -88,6 +91,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return errorResult;
 		} finally {
 			if (foregroundControl) {
+				cleanupForegroundRunRoot(deps.state.foregroundLiveChildren, runId, fs);
 				clearPendingForegroundControlNotices(deps.state, runId);
 				deps.state.foregroundControls.delete(runId);
 				if (deps.state.lastForegroundControlId === runId) {

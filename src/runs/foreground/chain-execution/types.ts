@@ -16,7 +16,7 @@ import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolve
 import { DEFAULT_GLOBAL_CONCURRENCY_LIMIT, Semaphore } from "../../shared/parallel-utils.ts";
 import { recordRun } from "../../shared/run-history.ts";
 import { cleanupWorktrees, createWorktrees, diffWorktrees, findWorktreeTaskCwdConflict, formatWorktreeDiffSummary, formatWorktreeTaskCwdConflict, type WorktreeSetup, } from "../../shared/worktree.ts";
-import { type ActivityState, type AgentProgress, type ArtifactConfig, type ArtifactPaths, type ControlEvent, type Details, type IntercomEventBus, type NestedRouteInfo, type ResolvedControlConfig, type ResolvedTurnBudget, type ResolvedToolBudget, type SingleResult, type ToolBudgetConfig, MAX_CONCURRENCY, resolveChildMaxSubagentDepth, } from "../../../shared/types.ts";
+import { type ActivityState, type AgentProgress, type ArtifactConfig, type ArtifactPaths, type ControlEvent, type Details, type IntercomEventBus, type NestedRouteInfo, type ResolvedControlConfig, type ResolvedTurnBudget, type ResolvedToolBudget, type SingleResult, type SubagentState, type ToolBudgetConfig, MAX_CONCURRENCY, resolveChildMaxSubagentDepth, } from "../../../shared/types.ts";
 import { resolveSubagentModelOverride } from "../../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../../shared/model-scope.ts";
 import { validateFileOnlyOutputMode } from "../../shared/single-output.ts";
@@ -87,6 +87,7 @@ export interface ParallelChainRunInput {
 		toolCount?: number;
 		interrupt?: () => boolean;
 	};
+	foregroundLiveChildren?: SubagentState["foregroundLiveChildren"];
 	results: SingleResult[];
 	allProgress: AgentProgress[];
 	outputs: ChainOutputMap;
@@ -143,6 +144,7 @@ export interface ChainExecutionParams {
 		toolCount?: number;
 		interrupt?: () => boolean;
 	};
+	foregroundLiveChildren?: SubagentState["foregroundLiveChildren"];
 	chainSkills?: string[];
 	chainDir?: string;
 	dynamicFanoutMaxItems?: number;

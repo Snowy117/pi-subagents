@@ -71,6 +71,7 @@ export async function runChainPath(data: ExecutionContextData, deps: ExecutorDep
 		childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(runId, agent, index) : undefined,
 		orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 		foregroundControl,
+		foregroundLiveChildren: deps.state.foregroundLiveChildren,
 		nestedRoute: foregroundControl?.nestedRoute,
 		chainSkills,
 		chainDir: params.chainDir ?? getProjectChainRunsDir(effectiveCwd),

@@ -7,6 +7,8 @@ import { outputEntryFromAsyncResult } from "../../shared/chain-outputs.ts";
 import { appendJsonl } from "./event-logging.ts";
 import { resetStepLiveDetail, tokenUsageFromAttempts } from "./usage-helpers.ts";
 import { stepSteerInboxDir } from "../control-channel.ts";
+import { actionTargetDir } from "../../shared/control-actions/paths.ts";
+import { markLiveTranscriptTerminal } from "../../../shared/live-transcript.ts";
 import { runSingleStep } from "./run-single-step.ts";
 import type { TokenUsage } from "../../../shared/types.ts";
 import type { RunnerOps } from "./runner-ops.ts";
@@ -44,6 +46,8 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 		flatIndex, flatStepCount: Math.max(state.statusPayload.steps.length, 1),
 		outputFile: path.join(state.asyncDir, `output-${flatIndex}.log`),
 		steerInboxDir: stepSteerInboxDir(state.asyncDir, flatIndex),
+		actionControlDir: actionTargetDir(path.join(state.asyncDir, "control"), flatIndex),
+		transcriptPath: state.statusPayload.steps[flatIndex].transcriptPath,
 		piPackageRoot: state.config.piPackageRoot,
 		piArgv1: state.config.piArgv1,
 		childIntercomTarget: state.config.childIntercomTargets?.[flatIndex],
@@ -156,6 +160,7 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 	}
 	state.statusPayload.lastUpdate = stepEndTime;
 	ops.writeStatusPayload();
+	markLiveTranscriptTerminal(state.statusPayload.steps[flatIndex].transcriptPath);
 
 	appendJsonl(state.eventsPath, JSON.stringify({
 		type: state.timedOut ? "subagent.step.failed" : childInterrupted ? "subagent.step.paused" : singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",

@@ -83,6 +83,7 @@ export interface RunSyncOptions {
 		dynamic?: boolean;
 		dynamicGroup?: boolean;
 	};
+	foregroundLiveChildren?: import("./async-types.ts").SubagentState["foregroundLiveChildren"];
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";
@@ -118,6 +119,10 @@ export interface ScheduledRunsConfig {
 	maxPending?: number;
 }
 
+export interface TuiConfig {
+	openSubagentsOnDown: boolean;
+}
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to full. */
@@ -142,4 +147,5 @@ export interface ExtensionConfig {
 	intercomBridge?: IntercomBridgeConfig;
 	proactiveSkillSubagents?: ProactiveSkillSubagentsConfig | false;
 	scheduledRuns?: ScheduledRunsConfig;
+	tui?: Partial<TuiConfig>;
 }

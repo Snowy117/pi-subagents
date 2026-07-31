@@ -15,6 +15,7 @@ const LEVEL_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	"medium": "Moderate reasoning",
 	"high": "Deep reasoning",
 	"xhigh": "Maximum reasoning (ultrathink)",
+	"max": "Absolute maximum reasoning",
 };
 
 function stepLabelFor(view: ChainClarifyView): string {

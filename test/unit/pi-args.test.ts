@@ -251,6 +251,26 @@ describe("buildPiArgs model wiring", () => {
 		assert.ok(args.includes("anthropic/claude-haiku-4-5:off"));
 	});
 
+	it("recognizes Pi 0.82 max suffixes without appending a duplicate level", () => {
+		assert.equal(applyThinkingSuffix("openai/gpt-5-pro:max", "high"), "openai/gpt-5-pro:max");
+		assert.equal(applyThinkingSuffix("openai/gpt-5-pro:max", "high", true), "openai/gpt-5-pro:high");
+	});
+
+	it("passes isolated steer and action control inboxes to a child", () => {
+		const { env } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			steerInboxDir: "/tmp/control/steer-targets/2",
+			actionControlDir: "/tmp/control/action-targets/2",
+		});
+
+		assert.equal(env.PI_SUBAGENT_STEER_INBOX, "/tmp/control/steer-targets/2");
+		assert.equal(env.PI_SUBAGENT_ACTION_CONTROL_DIR, "/tmp/control/action-targets/2");
+	});
+
 	it("does not append a thinking suffix for boolean false", () => {
 		const model = "glm-5.2-short-fast";
 		const once = applyThinkingSuffix(model, false);

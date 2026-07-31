@@ -8,6 +8,8 @@ import { appendJsonl } from "./event-logging.ts";
 import { resetStepLiveDetail } from "./usage-helpers.ts";
 import { resolveAsyncStepTranscriptPath } from "./parallel-helpers.ts";
 import { stepSteerInboxDir } from "../control-channel.ts";
+import { actionTargetDir } from "../../shared/control-actions/paths.ts";
+import { markLiveTranscriptTerminal } from "../../../shared/live-transcript.ts";
 import { runSingleStep } from "./run-single-step.ts";
 import { applyDynamicMaterialization, collectDynamicFanoutResults } from "./runner-dynamic-collection.ts";
 import type { RunnerStatusStep } from "./types.ts";
@@ -180,6 +182,8 @@ export async function runDynamicStep(state: RunnerState, ops: RunnerOps, step: D
 			flatIndex: fi, flatStepCount: Math.max(state.statusPayload.steps.length, 1),
 			outputFile: path.join(state.asyncDir, `output-${fi}.log`),
 			steerInboxDir: stepSteerInboxDir(state.asyncDir, fi),
+			actionControlDir: actionTargetDir(path.join(state.asyncDir, "control"), fi),
+			transcriptPath: state.statusPayload.steps[fi].transcriptPath,
 			piPackageRoot: state.config.piPackageRoot,
 			piArgv1: state.config.piArgv1,
 			childIntercomTarget: state.config.childIntercomTargets?.[fi],
@@ -226,6 +230,7 @@ export async function runDynamicStep(state: RunnerState, ops: RunnerOps, step: D
 		state.statusPayload.steps[fi].acceptance = singleResult.acceptance;
 		state.statusPayload.lastUpdate = taskEndTime;
 		ops.writeStatusPayload();
+		markLiveTranscriptTerminal(state.statusPayload.steps[fi].transcriptPath);
 		appendJsonl(state.eventsPath, JSON.stringify({
 			type: state.timedOut ? "subagent.step.failed" : childInterrupted ? "subagent.step.paused" : singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
 			ts: taskEndTime, runId: state.id, stepIndex: fi, agent: task.agent,

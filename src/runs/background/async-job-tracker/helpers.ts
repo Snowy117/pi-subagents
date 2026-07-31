@@ -43,6 +43,7 @@ export function summaryToJob(run: AsyncRunSummary): AsyncJobState {
 	return {
 		asyncId: run.id,
 		asyncDir: run.asyncDir,
+		cwd: run.cwd,
 		status: run.state,
 		sessionId: run.sessionId,
 		activityState: run.activityState,

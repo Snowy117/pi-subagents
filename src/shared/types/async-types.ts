@@ -18,6 +18,7 @@ export interface AsyncStartedEvent {
 	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
 	id?: string;
 	asyncDir?: string;
+	cwd?: string;
 	pid?: number;
 	sessionId?: string;
 	mode?: SubagentRunMode;
@@ -128,6 +129,7 @@ export type AsyncJobStep = NonNullable<AsyncStatus["steps"]>[number] & {
 export interface AsyncJobState {
 	asyncId: string;
 	asyncDir: string;
+	cwd?: string;
 	status: "queued" | "running" | "complete" | "failed" | "paused";
 	pid?: number;
 	sessionId?: string;
@@ -195,6 +197,19 @@ export interface ForegroundResumeRun {
 	children: ForegroundResumeChild[];
 }
 
+export interface ForegroundLiveChild {
+	runId: string;
+	index: number;
+	agent: string;
+	status: "running" | "completed" | "failed";
+	controlRoot: string;
+	steerInboxDir: string;
+	actionControlDir: string;
+	transcriptPath?: string;
+	transcriptRoot?: string;
+	updatedAt: number;
+}
+
 export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
@@ -202,6 +217,7 @@ export interface SubagentState {
 	subagentSpawns?: { sessionId: string | null; count: number };
 	asyncJobs: Map<string, AsyncJobState>;
 	foregroundRuns?: Map<string, ForegroundResumeRun>;
+	foregroundLiveChildren: Map<string, ForegroundLiveChild>;
 	foregroundControls: Map<string, {
 		runId: string;
 		mode: SubagentRunMode;

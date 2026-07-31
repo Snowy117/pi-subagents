@@ -18,6 +18,7 @@ export {
 	requestAsyncInterrupt,
 	requestAsyncSteer,
 	requestAsyncTimeout,
+	steerDeliveryMarker,
 	watchAsyncControlInbox,
 	writeSteerRequestToDir,
 } from "./control-channel/control.ts";

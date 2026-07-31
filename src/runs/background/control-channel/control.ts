@@ -45,6 +45,10 @@ export function writeSteerRequestToDir(dir: string, request: SteerRequest): stri
 	return requestPath;
 }
 
+export function steerDeliveryMarker(requestId: string): string {
+	return `<!-- pi-subagent-steer:${Buffer.from(requestId).toString("base64url")} -->`;
+}
+
 /**
  * Parent side: drop a portable interrupt request the runner's inbox watcher will
  * pick up regardless of OS. Written atomically (temp + rename), dir auto-created.
