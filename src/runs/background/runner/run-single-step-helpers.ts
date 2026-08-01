@@ -2,14 +2,13 @@
 
 import * as fs from "node:fs";
 import { deliverTimeoutRequest } from "../control-channel.ts";
-import { waitForImportedAsyncRoot } from "../chain-root-attachment.ts";
 import { readStatus } from "../../../shared/utils.ts";
 import { type StructuredOutputRuntime } from "../../shared/structured-output.ts";
 import { type ChildTranscriptWriter } from "../../../shared/child-transcript.ts";
 import { buildPiArgs } from "../../shared/pi-args.ts";
 import { appendTurnBudgetSystemPrompt } from "../../shared/turn-budget.ts";
 import { costSummaryFromAttempts } from "./usage-helpers.ts";
-import type { AcceptanceLedger, ArtifactPaths, ModelAttempt, ToolBudgetState, TurnBudgetState } from "../../../shared/types.ts";
+import type { ArtifactPaths, ModelAttempt, ToolBudgetState, TurnBudgetState } from "../../../shared/types.ts";
 import type { RunPiStreamingResult, SingleStepContext } from "./types.ts";
 import type { RunnerSubagentStep as SubagentStep } from "../../shared/parallel-utils.ts";
 
@@ -36,7 +35,7 @@ export async function runImportedAsyncRootStep(
 	});
 	try {
 		const imported = await waitForImportedAsyncRoot(step.importAsyncRoot, {
-			shouldAbort: () => importTimedOut || ctx.timeoutSignal?.aborted === true || ctx.skipAcceptance?.() === true,
+			shouldAbort: () => importTimedOut || ctx.timeoutSignal?.aborted === true,
 			timeoutMessage: ctx.timeoutMessage,
 		});
 		try {
@@ -44,7 +43,7 @@ export async function runImportedAsyncRootStep(
 		} catch {
 			// Output files are observability only for imported roots.
 		}
-		const timedOut = importTimedOut || imported.timedOut === true || ctx.timeoutSignal?.aborted === true || ctx.skipAcceptance?.() === true;
+		const timedOut = importTimedOut || imported.timedOut === true || ctx.timeoutSignal?.aborted === true;
 		return {
 			agent: imported.agent,
 			output: timedOut ? ctx.timeoutMessage ?? "Subagent timed out." : imported.output,
@@ -60,7 +59,6 @@ export async function runImportedAsyncRootStep(
 			structuredOutput: timedOut ? undefined : imported.structuredOutput,
 			structuredOutputPath: timedOut ? undefined : imported.structuredOutputPath,
 			structuredOutputSchemaPath: timedOut ? undefined : imported.structuredOutputSchemaPath,
-			acceptance: timedOut ? undefined : imported.acceptance,
 		};
 	} finally {
 		ctx.registerTimeout?.(undefined);
@@ -168,22 +166,19 @@ export function buildSingleStepResult(opts: {
 	modelAttempts: ModelAttempt[];
 	artifactPaths: ArtifactPaths | undefined;
 	transcriptWriter: ChildTranscriptWriter | undefined;
-	timedOutAfterAcceptance: boolean;
-	turnBudgetExceeded: boolean;
 	finalResult: RunPiStreamingResult | undefined;
 	turnBudget: TurnBudgetState | undefined;
 	toolBudget: ToolBudgetState | undefined;
 	toolBudgetBlocked: boolean;
 	completionGuardTriggeredFinal: boolean;
 	effectiveStructuredOutput: StructuredOutputRuntime | undefined;
-	effectiveAcceptance: AcceptanceLedger | undefined;
 }) {
 	const {
 		step, ctx, outputForSummary, effectiveFinalExitCode, effectiveFinalError,
 		attemptedModels, modelAttempts, artifactPaths, transcriptWriter,
-		timedOutAfterAcceptance, turnBudgetExceeded, finalResult, turnBudget,
+		finalResult, turnBudget,
 		toolBudget, toolBudgetBlocked, completionGuardTriggeredFinal,
-		effectiveStructuredOutput, effectiveAcceptance,
+		effectiveStructuredOutput,
 	} = opts;
 	return {
 		agent: step.agent,
@@ -199,17 +194,16 @@ export function buildSingleStepResult(opts: {
 		artifactPaths,
 		transcriptPath: artifactPaths && ctx.artifactConfig?.includeTranscript !== false ? transcriptWriter?.path : undefined,
 		transcriptError: transcriptWriter?.getError(),
-		interrupted: timedOutAfterAcceptance || turnBudgetExceeded ? false : finalResult?.interrupted,
-		timedOut: timedOutAfterAcceptance ? true : finalResult?.timedOut,
+		interrupted: finalResult?.timedOut || finalResult?.turnBudgetExceeded ? false : finalResult?.interrupted,
+		timedOut: finalResult?.timedOut,
 		turnBudget,
-		turnBudgetExceeded: turnBudgetExceeded || undefined,
-		wrapUpRequested: finalResult?.wrapUpRequested || turnBudget?.outcome === "wrap-up-requested" || turnBudgetExceeded || undefined,
+		turnBudgetExceeded: finalResult?.turnBudgetExceeded || undefined,
+		wrapUpRequested: finalResult?.wrapUpRequested || turnBudget?.outcome === "wrap-up-requested" || finalResult?.turnBudgetExceeded || undefined,
 		toolBudget,
 		toolBudgetBlocked: toolBudgetBlocked || undefined,
 		completionGuardTriggered: completionGuardTriggeredFinal,
-		structuredOutput: timedOutAfterAcceptance || turnBudgetExceeded ? undefined : (finalResult as (RunPiStreamingResult & { structuredOutput?: unknown }) | undefined)?.structuredOutput,
-		structuredOutputPath: timedOutAfterAcceptance || turnBudgetExceeded ? undefined : effectiveStructuredOutput?.outputPath,
-		structuredOutputSchemaPath: timedOutAfterAcceptance || turnBudgetExceeded ? undefined : effectiveStructuredOutput?.schemaPath,
-		acceptance: effectiveAcceptance,
+		structuredOutput: effectiveStructuredOutput === undefined || finalResult?.timedOut || finalResult?.turnBudgetExceeded ? undefined : (finalResult as (RunPiStreamingResult & { structuredOutput?: unknown }) | undefined)?.structuredOutput,
+		structuredOutputPath: effectiveStructuredOutput === undefined || finalResult?.timedOut || finalResult?.turnBudgetExceeded ? undefined : effectiveStructuredOutput?.outputPath,
+		structuredOutputSchemaPath: effectiveStructuredOutput === undefined || finalResult?.timedOut || finalResult?.turnBudgetExceeded ? undefined : effectiveStructuredOutput?.schemaPath,
 	};
 }

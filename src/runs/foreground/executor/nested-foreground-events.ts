@@ -4,7 +4,6 @@
  *  callback is the same closure, just parameterised. */
 
 import { type IntercomBridgeState, resolveSubagentIntercomTarget } from "../../../intercom/intercom-bridge.ts";
-import { type SequentialStep, isParallelStep } from "../../../shared/settings.ts";
 import { type Details } from "../../../shared/types.ts";
 import { resolveInheritedNestedRouteFromEnv, resolveNestedParentAddressFromEnv, writeNestedEvent } from "../../shared/nested-events.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -16,13 +15,12 @@ export function createNestedForegroundEventEmitter(input: {
 	nestedParentAddress: ReturnType<typeof resolveNestedParentAddressFromEnv>;
 	runId: string;
 	hasTasks: boolean;
-	hasChain: boolean;
 	params: SubagentParamsLike;
 	intercomBridge: IntercomBridgeState;
 	foregroundControl: { startedAt: number } | undefined;
 	foregroundMode: "single" | "parallel" | "chain";
 }): (type: "subagent.nested.started" | "subagent.nested.completed", result?: AgentToolResult<Details> & { isError?: boolean }) => void {
-	const { inheritedNestedRoute, nestedParentAddress, runId, hasTasks, hasChain, params, intercomBridge, foregroundControl, foregroundMode } = input;
+	const { inheritedNestedRoute, nestedParentAddress, runId, hasTasks, params, intercomBridge, foregroundControl, foregroundMode } = input;
 	return (type, result) => {
 	if (!inheritedNestedRoute || !nestedParentAddress) return;
 	const now = Date.now();
@@ -39,9 +37,7 @@ export function createNestedForegroundEventEmitter(input: {
 		: undefined;
 	const agentsForSummary = hasTasks && params.tasks
 		? params.tasks.map((task) => task.agent)
-		: hasChain && params.chain
-			? params.chain.flatMap((step) => isParallelStep(step) ? step.parallel.map((task) => task.agent) : [(step as SequentialStep).agent])
-			: params.agent ? [params.agent] : [];
+		: params.agent ? [params.agent] : [];
 	const leafIntercomTarget = intercomBridge.active && agentsForSummary[0]
 		? resolveSubagentIntercomTarget(runId, agentsForSummary[0], 0)
 		: undefined;

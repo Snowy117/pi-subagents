@@ -3,7 +3,6 @@
 import { normalizeSkillInput } from "../../../agents/skills.ts";
 import { resolveSubagentIntercomTarget } from "../../../intercom/intercom-bridge.ts";
 import { type ModelInfo, toModelInfo } from "../../../shared/model-info.ts";
-import { type ChainStep } from "../../../shared/settings.ts";
 import { type Details, resolveChildMaxSubagentDepth, resolveCurrentMaxSubagentDepth, resolveTopLevelParallelConcurrency, resolveTopLevelParallelMaxTasks, wrapForkTask } from "../../../shared/types.ts";
 import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "../../background/async-execution.ts";
 import { resolveSubagentModelOverride } from "../../shared/model-fallback.ts";
@@ -11,8 +10,7 @@ import { normalizeSingleOutputOverride } from "../../shared/single-output.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
 import { randomUUID } from "node:crypto";
 import { shouldForkAgent } from "./budget-resolution.ts";
-import { collectChainSessionFiles, collectChainThinkingOverrides, wrapChainTasksForFork } from "./fork-helpers.ts";
-import { buildChainWorktreeTaskCwdError, buildParallelModeError, buildParallelWorktreeTaskCwdError, resolveSingleRunOutputBaseDir } from "./parallel-helpers.ts";
+import { buildParallelModeError, buildParallelWorktreeTaskCwdError, resolveSingleRunOutputBaseDir } from "./parallel-helpers.ts";
 import { type ExecutionContextData, type ExecutorDeps } from "./types.ts";
 import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 
@@ -25,7 +23,6 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		ctx,
 		shareEnabled,
 		sessionRoot,
-		sessionFileForIndex,
 		sessionFileForTask,
 		thinkingOverrideForTask,
 		artifactConfig,
@@ -36,21 +33,9 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		nestedRoute,
 		contextPolicy,
 	} = data;
-	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
-	const hasSingle = !hasChain && !hasTasks && Boolean(params.agent);
+	const hasSingle = !hasTasks && Boolean(params.agent);
 	if (!effectiveAsync) return null;
-
-	if (hasChain && params.chain) {
-		const chainWorktreeTaskCwdError = buildChainWorktreeTaskCwdError(params.chain as ChainStep[], effectiveCwd);
-		if (chainWorktreeTaskCwdError) {
-			return {
-				content: [{ type: "text", text: chainWorktreeTaskCwdError }],
-				isError: true,
-				details: { mode: "chain" as const, results: [] },
-			};
-		}
-	}
 
 	if (hasTasks && params.tasks) {
 		const maxParallelTasks = resolveTopLevelParallelMaxTasks(deps.config.parallel?.maxTasks);
@@ -133,47 +118,6 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			controlIntercomTarget,
 			childIntercomTarget,
 			nestedRoute,
-			timeoutMs: data.timeoutMs,
-			turnBudget: data.turnBudget,
-			toolBudget: data.toolBudget,
-			configToolBudget: data.configToolBudget,
-			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
-		});
-	}
-
-	if (hasChain && params.chain) {
-		const normalized = normalizeSkillInput(params.skill);
-		const chainSkills = normalized === false ? [] : (normalized ?? []);
-		const chain = wrapChainTasksForFork(params.chain as ChainStep[], contextPolicy);
-		return executeAsyncChain(id, {
-			persistentChildren: deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(deps.config).enabled,
-			chain,
-			task: params.task,
-			agents,
-			ctx: asyncCtx,
-			availableModels,
-			cwd: effectiveCwd,
-			maxOutput: params.maxOutput,
-			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-			artifactConfig,
-			shareEnabled,
-			sessionRoot,
-			chainSkills,
-			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForTask, deps.config.chain?.dynamicFanout?.maxItems),
-			thinkingOverridesByFlatIndex: collectChainThinkingOverrides(chain, thinkingOverrideForTask, deps.config.chain?.dynamicFanout?.maxItems),
-			dynamicFanoutMaxItems: deps.config.chain?.dynamicFanout?.maxItems,
-			maxSubagentDepth: currentMaxSubagentDepth,
-			worktreeSetupHook: deps.config.worktreeSetupHook,
-			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
-			worktreeBaseDir: deps.config.worktreeBaseDir,
-			controlConfig,
-			controlIntercomTarget,
-			childIntercomTarget,
-			nestedRoute,
-			timeoutMs: data.timeoutMs,
-			turnBudget: data.turnBudget,
-			toolBudget: data.toolBudget,
-			configToolBudget: data.configToolBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 		});
 	}
@@ -222,11 +166,6 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			controlIntercomTarget,
 			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(agent, index) : undefined,
 			nestedRoute,
-			acceptance: params.acceptance,
-			timeoutMs: data.timeoutMs,
-			turnBudget: data.turnBudget,
-			toolBudget: data.toolBudget,
-			configToolBudget: data.configToolBudget,
 		});
 	}
 

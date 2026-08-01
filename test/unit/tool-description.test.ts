@@ -34,16 +34,10 @@ describe("registered subagent tool description", () => {
 		for (const builtinName of ["scout", "worker", "planner"]) {
 			assert.doesNotMatch(description, new RegExp(`\\b${builtinName}\\b`));
 		}
-		assert.match(description, /use \{ action: "list" \} to inspect configured agents\/chains/i);
+		assert.match(description, /use \{ action: "list" \} before execution and only run executable\/non-disabled agents/i);
 		assert.match(description, /executable\/non-disabled/i);
 		assert.match(description, /proactive skill subagent suggestions/i);
 		assert.doesNotMatch(description, /disabled builtins/i);
-		assert.match(description, /output\?,reads\?,progress\?/i);
-		assert.match(description, /timeoutMs/i);
-		assert.match(description, /maxRuntimeMs/i);
-		assert.match(description, /foreground and async\/background runs/i);
-		assert.doesNotMatch(description, /only for foreground runs/i);
-		assert.doesNotMatch(description, /omit for async\/background runs/i);
 		assert.match(description, /SAFETY-CRITICAL SUBAGENT GUIDANCE/);
 		assert.match(description, /Do not sleep or poll status just to wait/i);
 		assert.match(description, /ordinary child subagents are not orchestrators/i);
@@ -54,8 +48,6 @@ describe("registered subagent tool description", () => {
 		assert.match(description, /schedule-list/);
 		assert.match(description, /action: "eject"/);
 		assert.match(description, /action: "disable"/);
-		assert.match(description, /status\.json/);
-		assert.match(description, /events\.jsonl/);
 	});
 
 	it("offers a compact mode that keeps safety-critical guidance", () => {
@@ -65,7 +57,6 @@ describe("registered subagent tool description", () => {
 		assert.ok(description.length < FULL_SUBAGENT_TOOL_DESCRIPTION.length * 0.8, "compact mode should be materially shorter than full mode");
 		assert.match(description, /SINGLE/);
 		assert.match(description, /PARALLEL/);
-		assert.match(description, /CHAIN/);
 		assert.match(description, /action without execution fields/i);
 		assert.match(description, /wait tool/i);
 		assert.match(description, /Do not sleep or poll/i);

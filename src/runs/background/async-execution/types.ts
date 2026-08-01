@@ -5,9 +5,7 @@ import type { RunnerStep } from "../../shared/parallel-utils.ts";
 import type { AvailableModelInfo, ParentModel } from "../../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../../shared/model-scope.ts";
 import { buildWorkflowGraphSnapshot } from "../../shared/workflow-graph.ts";
-import type { ImportedAsyncRoot } from "../chain-root-attachment.ts";
 import type {
-	AcceptanceInput,
 	ArtifactConfig,
 	Details,
 	MaxOutputConfig,
@@ -33,7 +31,6 @@ export interface AsyncExecutionContext {
 export interface AsyncChainParams {
 	chain: ChainStep[];
 	task?: string;
-	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
 	resultMode?: Exclude<SubagentRunMode, "single">;
 	agents: AgentConfig[];
 	ctx: AsyncExecutionContext;
@@ -57,7 +54,6 @@ export interface AsyncChainParams {
 	controlIntercomTarget?: string;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 	nestedRoute?: NestedRouteInfo;
-	acceptance?: AcceptanceInput;
 	timeoutMs?: number;
 	turnBudget?: ResolvedTurnBudget;
 	toolBudget?: ResolvedToolBudget;
@@ -95,7 +91,6 @@ export interface AsyncSingleParams {
 	controlIntercomTarget?: string;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 	nestedRoute?: NestedRouteInfo;
-	acceptance?: AcceptanceInput;
 	timeoutMs?: number;
 	turnBudget?: ResolvedTurnBudget;
 	toolBudget?: ResolvedToolBudget;
@@ -113,7 +108,6 @@ export interface AsyncExecutionResult {
 export interface AsyncRunnerStepBuildParams {
 	chain: ChainStep[];
 	task?: string;
-	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
 	resultMode?: SubagentRunMode;
 	agents: AgentConfig[];
 	ctx: AsyncExecutionContext;

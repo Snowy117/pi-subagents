@@ -11,7 +11,6 @@
 
 export * from "./types/budget-types.ts";
 export * from "./types/control-types.ts";
-export * from "./types/acceptance-types.ts";
 export * from "./types/result-types.ts";
 export * from "./types/async-types.ts";
 export * from "./types/nested-types.ts";

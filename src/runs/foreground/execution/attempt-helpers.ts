@@ -9,17 +9,13 @@
 
 import type { Message } from "@earendil-works/pi-ai";
 import type {
-	AcceptanceLedger,
 	AgentProgress,
-	ResolvedAcceptanceConfig,
 	RunSyncOptions,
 	SingleResult,
 	Usage,
 } from "../../../shared/types.ts";
-import { stripAcceptanceReport } from "../../shared/acceptance.ts";
 
 export const artifactOutputByResult = new WeakMap<SingleResult, string>();
-export const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
 
 export function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
@@ -48,36 +44,11 @@ export function resolveAttemptTimeout(options: RunSyncOptions): { timeoutMs: num
 	};
 }
 
-export function buildSkippedAcceptanceLedger(acceptance: ResolvedAcceptanceConfig, input: { id: string; message: string }): AcceptanceLedger {
-	return {
-		status: acceptance.level === "none" ? "not-required" : "rejected",
-		explicit: acceptance.explicit,
-		effectiveAcceptance: acceptance,
-		inferredReason: acceptance.inferredReason,
-		criteria: acceptance.criteria,
-		runtimeChecks: acceptance.level === "none"
-			? []
-			: [{ id: input.id, status: "failed", message: input.message }],
-		verifyRuns: [],
-	};
-}
-
 export function appendRecentOutput(progress: AgentProgress, lines: string[]): void {
 	if (lines.length === 0) return;
 	progress.recentOutput.push(...lines.filter((line) => line.trim()));
 	if (progress.recentOutput.length > 50) {
 		progress.recentOutput.splice(0, progress.recentOutput.length - 50);
-	}
-}
-
-export function stripAcceptanceReportsFromMessages(messages: Message[] | undefined): void {
-	for (const message of messages ?? []) {
-		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-		for (const part of message.content) {
-			if (part.type === "text" && "text" in part && typeof part.text === "string") {
-				part.text = stripAcceptanceReport(part.text);
-			}
-		}
 	}
 }
 

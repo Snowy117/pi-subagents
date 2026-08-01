@@ -5,9 +5,8 @@
 
 import type { ResolvedTurnBudget, ResolvedToolBudget, TurnBudgetConfig, ToolBudgetConfig } from "./budget-types.ts";
 import type { ControlEvent, ResolvedControlConfig, ControlConfig, CompletionBatchConfig, WaitToolConfig } from "./control-types.ts";
-import type { IntercomEventBus, Details, SingleResult, MaxOutputConfig, OutputMode, JsonSchemaObject, SubagentRunMode } from "./result-types.ts";
+import type { IntercomEventBus, Details, SingleResult, MaxOutputConfig, OutputMode } from "./result-types.ts";
 import type { NestedRouteInfo } from "./async-types.ts";
-import type { AcceptanceInput } from "./acceptance-types.ts";
 import type { AgentConfig } from "../../agents/agents.ts";
 import type { ModelScopeConfig } from "../../runs/shared/model-scope.ts";
 
@@ -54,7 +53,7 @@ export interface RunSyncOptions {
 	index?: number;
 	sessionDir?: string;
 	sessionFile?: string;
-	share?: boolean;
+
 	outputPath?: string;
 	outputMode?: OutputMode;
 	maxSubagentDepth?: number;
@@ -76,13 +75,7 @@ export interface RunSyncOptions {
 		schemaPath: string;
 		outputPath: string;
 	};
-	acceptance?: AcceptanceInput;
-	acceptanceContext?: {
-		mode?: SubagentRunMode;
-		async?: boolean;
-		dynamic?: boolean;
-		dynamicGroup?: boolean;
-	};
+
 	foregroundLiveChildren?: import("./async-types.ts").SubagentState["foregroundLiveChildren"];
 	/** Launch the child as a persistent Pi RPC process (Option B). Defaults to false; the extension config layer resolves the user-facing default. */
 	persistentChildren?: boolean;
@@ -100,12 +93,6 @@ export interface IntercomBridgeConfig {
 interface TopLevelParallelConfig {
 	maxTasks?: number;
 	concurrency?: number;
-}
-
-interface ExtensionChainConfig {
-	dynamicFanout?: {
-		maxItems?: number;
-	};
 }
 
 export interface ProactiveSkillSubagentsConfig {
@@ -152,7 +139,6 @@ export interface ExtensionConfig {
 	turnBudget?: TurnBudgetConfig;
 	toolBudget?: ToolBudgetConfig;
 	parallel?: TopLevelParallelConfig;
-	chain?: ExtensionChainConfig;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	worktreeBaseDir?: string;

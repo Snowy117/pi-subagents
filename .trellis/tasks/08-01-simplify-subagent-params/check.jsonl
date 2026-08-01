@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/typescript/quality-guidelines.md", "reason": "Review checklist: imports, exports, no dangling references, test requirements"}
+{"file": ".trellis/spec/typescript/index.md", "reason": "Pre-development checklist, quality check before committing"}

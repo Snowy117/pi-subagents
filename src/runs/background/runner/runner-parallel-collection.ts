@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { parseSessionTokens } from "../../../shared/session-tokens.ts";
 import { aggregateParallelOutputs, type ParallelStepGroup } from "../../shared/parallel-utils.ts";
-import { outputEntryFromAsyncResult } from "../../shared/chain-outputs.ts";
+
 import { appendParallelWorktreeSummary } from "./parallel-helpers.ts";
 import { tokenUsageFromAttempts } from "./usage-helpers.ts";
 import type { WorktreeSetup } from "../../shared/worktree.ts";
@@ -63,16 +63,16 @@ export function collectParallelGroupResults(
 			structuredOutput: pr.structuredOutput,
 			structuredOutputPath: pr.structuredOutputPath,
 			structuredOutputSchemaPath: pr.structuredOutputSchemaPath,
-			acceptance: pr.acceptance,
 		});
 	}
 	for (let t = 0; t < group.parallel.length; t++) {
 		const outputName = group.parallel[t]?.outputName;
-		if (outputName) state.outputs[outputName] = outputEntryFromAsyncResult({
+		if (outputName) state.outputs[outputName] = {
+			text: parallelResults[t]!.structuredOutput !== undefined ? JSON.stringify(parallelResults[t]!.structuredOutput) : parallelResults[t]!.output,
+			...(parallelResults[t]!.structuredOutput !== undefined ? { structured: parallelResults[t]!.structuredOutput } : {}),
 			agent: parallelResults[t]!.agent,
-			output: parallelResults[t]!.output,
-			structuredOutput: parallelResults[t]!.structuredOutput,
-		}, stepIndex);
+			stepIndex,
+		};
 	}
 	state.statusPayload.outputs = state.outputs;
 

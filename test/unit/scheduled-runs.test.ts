@@ -203,15 +203,12 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
 
 	it("requires exactly one execution mode", async () => {
 		const harness = freshHarness();
-		// tasks + chain is genuinely ambiguous (both are execution arrays)
-		const chainAndTasks = await harness.manager.handleToolCall({ action: "schedule", tasks: [{ agent: "scout", task: "x" }], chain: [{ agent: "scout", task: "y" }], schedule: "+10m" }, harness.ctx);
-		assert.match(chainAndTasks.content[0]!.text, /exactly one execution mode/);
 		// no execution mode at all
 		const none = await harness.manager.handleToolCall({ action: "schedule", schedule: "+10m" }, harness.ctx);
 		assert.match(none.content[0]!.text, /exactly one execution mode/);
 	});
 
-	it("requires a schedule and rejects fork/async-false/clarify-true", async () => {
+	it("requires a schedule and rejects fork/async-false", async () => {
 		const harness = freshHarness();
 		const noSchedule = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x" }, harness.ctx);
 		assert.match(noSchedule.content[0]!.text, /requires schedule/);
@@ -219,8 +216,6 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
 		assert.match(fork.content[0]!.text, /fresh context/);
 		const sync = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m", async: false }, harness.ctx);
 		assert.match(sync.content[0]!.text, /always async/);
-		const clarify = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m", clarify: true }, harness.ctx);
-		assert.match(clarify.content[0]!.text, /clarify/);
 	});
 
 	it("rejects a past schedule time", async () => {
@@ -324,7 +319,6 @@ describe("ScheduledRunManager firing", () => {
 		assert.equal(harness.launches.length, 1, "launch should be invoked once when the timer fires");
 		const launch = harness.launches[0]!;
 		assert.equal(launch.params.async, true);
-		assert.equal(launch.params.clarify, false);
 		assert.equal(launch.params.context, "fresh");
 		assert.equal(launch.params.agent, "scout");
 		assert.equal(launch.params.task, "review");

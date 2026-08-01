@@ -1,4 +1,4 @@
-import { BUILTIN_AGENT_NAMES, discoverAgents } from "../../agents/agents.ts";
+import { discoverAgents, type ChainConfig } from "../../agents/agents.ts";
 import type { SubagentState } from "../../shared/types.ts";
 
 export const makeAgentCompletions = (state: SubagentState, multiAgent: boolean) => (prefix: string) => {
@@ -51,9 +51,10 @@ export const makeAgentCompletions = (state: SubagentState, multiAgent: boolean) 
 
 export const makeBuiltinAgentNameCompletions = () => (prefix: string) => {
 	if (prefix.includes(" ")) return null;
+	const { BUILTIN_AGENT_NAMES } = require("../../agents/agents.ts");
 	return BUILTIN_AGENT_NAMES
-		.filter((name) => name.startsWith(prefix))
-		.map((name) => ({ value: name, label: name }));
+		.filter((name: string) => name.startsWith(prefix))
+		.map((name: string) => ({ value: name, label: name }));
 };
 
 export const makeProviderCompletions = (state: SubagentState) => (prefix: string) => {

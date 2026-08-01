@@ -7,8 +7,6 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
 	type AgentConfig,
-	type ChainConfig,
-	type ChainStepConfig,
 	buildRuntimeName,
 	defaultInheritProjectContext,
 	defaultInheritSkills,
@@ -17,16 +15,13 @@ import {
 	frontmatterNameForConfig,
 } from "../agents.ts";
 import { serializeAgent } from "../agent-serializer.ts";
-import { serializeChain, serializeJsonChain } from "../chain-serializer.ts";
 import { getProjectConfigDir } from "../../shared/utils.ts";
 import type { Details } from "../../shared/types.ts";
 import {
 	asDisambiguationScope,
-	chainStepWarnings,
 	configObject,
 	fallbackModelsWarning,
 	findAgents,
-	findChains,
 	hasKey,
 	modelWarning,
 	nameExistsInScope,
@@ -36,7 +31,6 @@ import {
 	result,
 	sanitizeName,
 	skillsWarning,
-	unknownChainAgents,
 	type ManagementContext,
 	type ManagementParams,
 	type ManagementScope,
@@ -44,7 +38,6 @@ import {
 import {
 	applyAgentConfig,
 	editableAgentConfig,
-	parseStepList,
 	preservedAgentFrontmatterFields,
 } from "./config-editing.ts";
 
@@ -63,28 +56,15 @@ export function handleCreate(params: ManagementParams, ctx: ManagementContext): 
 	const scopeRaw = cfg.scope ?? "user";
 	if (scopeRaw !== "user" && scopeRaw !== "project") return result("config.scope must be 'user' or 'project'.", true);
 	const scope = scopeRaw as ManagementScope;
-	const isChain = hasKey(cfg, "steps");
 	const d = discoverAgentsAll(ctx.cwd);
 	const projectConfigDir = getProjectConfigDir(ctx.cwd);
-	const targetDir = isChain
-		? scope === "user" ? d.userChainDir : d.projectChainDir ?? path.join(projectConfigDir, "chains")
-		: scope === "user" ? d.userDir : d.projectDir ?? path.join(projectConfigDir, "agents");
+	const targetDir = scope === "user" ? d.userDir : d.projectDir ?? path.join(projectConfigDir, "agents");
 	fs.mkdirSync(targetDir, { recursive: true });
 	if (nameExistsInScope(ctx.cwd, scope, runtimeName)) return result(`Name '${runtimeName}' already exists in ${scope} scope. Use update instead.`, true);
-	const targetPath = path.join(targetDir, isChain ? `${runtimeName}.chain.md` : `${runtimeName}.md`);
-	if (fs.existsSync(targetPath)) return result(`File already exists at ${targetPath} but is not a valid ${isChain ? "chain" : "agent"} definition. Remove or rename it first.`, true);
+	const targetPath = path.join(targetDir, `${runtimeName}.md`);
+	if (fs.existsSync(targetPath)) return result(`File already exists at ${targetPath} but is not a valid agent definition. Remove or rename it first.`, true);
 	const warnings: string[] = [];
-	if (!isChain && d.builtin.some((a) => a.name === runtimeName)) warnings.push(`Note: this shadows the builtin agent '${runtimeName}'.`);
-	if (isChain) {
-		const parsed = parseStepList(cfg.steps);
-		if (parsed.error) return result(parsed.error, true);
-		const chain: ChainConfig = { name: runtimeName, localName: name, packageName: parsedPackage.packageName, description: cfg.description.trim(), source: scope, filePath: targetPath, steps: parsed.steps! };
-		fs.writeFileSync(targetPath, serializeChain(chain), "utf-8");
-		const missing = unknownChainAgents(ctx.cwd, chain.steps);
-		if (missing.length) warnings.push(`Warning: chain steps reference unknown agents: ${missing.join(", ")}.`);
-		warnings.push(...chainStepWarnings(ctx, chain.steps));
-		return result([`Created chain '${runtimeName}' at ${targetPath}.`, ...warnings].join("\n"));
-	}
+	if (d.builtin.some((a) => a.name === runtimeName)) warnings.push(`Note: this shadows the builtin agent '${runtimeName}'.`);
 	const agent: AgentConfig = {
 		name: runtimeName,
 		localName: name,
@@ -171,49 +151,5 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 			: `Updated agent '${oldName}' to '${updated.name}' at ${updated.filePath}.`;
 		return result([headline, ...warnings].join("\n"));
 	}
-	const scopeHint = asDisambiguationScope(params.agentScope);
-	const targetOrError = resolveTarget("chain", params.chainName!, findChains(params.chainName!, ctx.cwd, scopeHint ?? "both"), ctx.cwd, params.agentScope);
-	if ("content" in targetOrError) return targetOrError;
-	const target = targetOrError;
-	const updated: ChainConfig = { ...target, steps: [...target.steps] };
-	const oldName = target.name;
-	if (hasKey(cfg, "name") && (typeof cfg.name !== "string" || !cfg.name.trim())) return result("config.name must be a non-empty string when provided.", true);
-	if (hasKey(cfg, "description") && (typeof cfg.description !== "string" || !cfg.description.trim())) return result("config.description must be a non-empty string when provided.", true);
-	let newLocalName = target.localName ?? frontmatterNameForConfig(target);
-	if (hasKey(cfg, "name")) {
-		newLocalName = sanitizeName(cfg.name as string);
-		if (!newLocalName) return result("config.name is invalid after sanitization.", true);
-	}
-	let newPackageName = target.packageName;
-	if (hasKey(cfg, "package")) {
-		const parsedPackage = parsePackageConfig(cfg.package);
-		if (parsedPackage.error) return result(parsedPackage.error, true);
-		newPackageName = parsedPackage.packageName;
-	}
-	let parsedSteps: ChainStepConfig[] | undefined;
-	if (hasKey(cfg, "steps")) {
-		const parsed = parseStepList(cfg.steps);
-		if (parsed.error) return result(parsed.error, true);
-		parsedSteps = parsed.steps!;
-	}
-	updated.localName = newLocalName;
-	updated.packageName = newPackageName;
-	updated.name = buildRuntimeName(newLocalName, newPackageName);
-	if (hasKey(cfg, "description")) updated.description = (cfg.description as string).trim();
-	if (parsedSteps) {
-		updated.steps = parsedSteps;
-		const missing = unknownChainAgents(ctx.cwd, updated.steps);
-		if (missing.length) warnings.push(`Warning: chain steps reference unknown agents: ${missing.join(", ")}.`);
-		warnings.push(...chainStepWarnings(ctx, updated.steps));
-	}
-	if (updated.name !== oldName) {
-		const renamed = renamePath("chain", target.filePath, updated.name, target.source, ctx.cwd);
-		if (renamed.error) return result(renamed.error, true);
-		updated.filePath = renamed.filePath!;
-	}
-	fs.writeFileSync(updated.filePath, updated.filePath.endsWith(".chain.json") ? serializeJsonChain(updated) : serializeChain(updated), "utf-8");
-	const headline = updated.name === oldName
-		? `Updated chain '${updated.name}' at ${updated.filePath}.`
-		: `Updated chain '${oldName}' to '${updated.name}' at ${updated.filePath}.`;
-	return result([headline, ...warnings].join("\n"));
+	return result("Updating chains via management is no longer supported.", true);
 }

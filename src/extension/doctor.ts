@@ -6,7 +6,6 @@ import { diagnoseIntercomBridge, type IntercomBridgeDiagnostic } from "../interc
 import { discoverAvailableSkills, type SkillSource } from "../agents/skills.ts";
 import {
 	ASYNC_DIR,
-	CHAIN_RUNS_DIR,
 	RESULTS_DIR,
 	TEMP_ROOT_DIR,
 	type ExtensionConfig,
@@ -17,7 +16,6 @@ interface DoctorPaths {
 	tempRootDir: string;
 	asyncDir: string;
 	resultsDir: string;
-	chainRunsDir: string;
 }
 
 interface DoctorDeps {
@@ -32,7 +30,6 @@ interface DoctorReportInput {
 	config: ExtensionConfig;
 	state: SubagentState;
 	context?: "fresh" | "fork";
-	requestedSessionDir?: string;
 	currentSessionFile?: string | null;
 	currentSessionId?: string | null;
 	orchestratorTarget?: string;
@@ -46,7 +43,6 @@ const DEFAULT_PATHS: DoctorPaths = {
 	tempRootDir: TEMP_ROOT_DIR,
 	asyncDir: ASYNC_DIR,
 	resultsDir: RESULTS_DIR,
-	chainRunsDir: CHAIN_RUNS_DIR,
 };
 
 const DEFAULT_DEPS: DoctorDeps = {
@@ -105,9 +101,6 @@ function formatSkillSourceCounts(skills: Array<{ source: SkillSource }>): string
 }
 
 function formatConfiguredSessionDir(input: DoctorReportInput): string {
-	if (input.requestedSessionDir) {
-		return path.resolve(input.expandTilde?.(input.requestedSessionDir) ?? input.requestedSessionDir);
-	}
 	if (input.config.defaultSessionDir) {
 		return path.resolve(input.expandTilde?.(input.config.defaultSessionDir) ?? input.config.defaultSessionDir);
 	}
@@ -194,7 +187,6 @@ export function buildDoctorReport(input: DoctorReportInput): string {
 		formatExistingDirectory("temp root", paths.tempRootDir),
 		formatExistingDirectory("async runs", paths.asyncDir),
 		formatExistingDirectory("results", paths.resultsDir),
-		formatExistingDirectory("chain runs", paths.chainRunsDir),
 		"",
 		"Discovery",
 		...formatDiscovery(input, deps),

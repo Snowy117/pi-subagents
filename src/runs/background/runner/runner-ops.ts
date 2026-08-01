@@ -1,5 +1,5 @@
 import type { SteerRequest } from "../control-channel.ts";
-import type { TurnBudgetState, AcceptanceLedger } from "../../../shared/types.ts";
+import type { TurnBudgetState } from "../../../shared/types.ts";
 import { buildControlEvent } from "../../shared/subagent-control.ts";
 import type { ChildEvent } from "./types.ts";
 import type { SingleStepResult } from "./run-single-step.ts";
@@ -29,7 +29,7 @@ export interface RunnerOps {
 	pausedStepResult: (agent: string) => SingleStepResult;
 	timedOutStepResult: (agent: string) => SingleStepResult;
 	consumePendingAppendRequests: () => void;
-	markDynamicGraphGroup: (stepIndex: number, status: "completed" | "failed" | "running", error?: string, acceptance?: AcceptanceLedger) => void;
+	markDynamicGraphGroup: (stepIndex: number, status: "completed" | "failed" | "running", error?: string) => void;
 	stepOutputActivityAt: (index: number) => number;
 	appendControlEvent: (event: ReturnType<typeof buildControlEvent>) => void;
 	syncTopLevelCurrentTool: () => void;

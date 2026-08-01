@@ -4,13 +4,11 @@
  *  tree and ExecutionContextData + foreground control. On failure returns the
  *  early-exit AgentToolResult the inlined code produced. */
 
-import { type AgentConfig, type AgentScope } from "../../../agents/agents.ts";
-import { resolveExecutionAgentScope } from "../../../agents/agent-scope.ts";
+import { type AgentConfig } from "../../../agents/agents.ts";
 import { type IntercomBridgeState, applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget } from "../../../intercom/intercom-bridge.ts";
 import { getArtifactsDir } from "../../../shared/artifacts.ts";
 import { createForkContextResolver } from "../../../shared/fork-context.ts";
 import { resolveCurrentSessionId } from "../../../shared/session-identity.ts";
-import { isParallelStep } from "../../../shared/settings.ts";
 import { type ArtifactConfig, type Details, DEFAULT_ARTIFACT_CONFIG, checkSubagentDepth } from "../../../shared/types.ts";
 import { applyForceTopLevelAsyncOverride } from "../../background/top-level-async.ts";
 import { createNestedRoute, resolveInheritedNestedRouteFromEnv, resolveNestedParentAddressFromEnv } from "../../shared/nested-events.ts";
@@ -20,10 +18,10 @@ import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { buildRequestedModeError, normalizeRepeatedParallelCounts, resolveAgentDefaultContextPolicy, resolveForegroundTimeout, resolveToolBudget, resolveTurnBudget, shouldForkAgent } from "./budget-resolution.ts";
+import { normalizeRepeatedParallelCounts, resolveAgentDefaultContextPolicy, shouldForkAgent } from "./budget-resolution.ts";
 import { countRequestedSubagentSpawns, reserveSubagentSpawns } from "./foreground-state.ts";
 import { preflightForkSessionsForStaticTasks, toExecutionErrorResult, withForkContext } from "./fork-helpers.ts";
-import { validateExecutionChainBindings, validateExecutionInput } from "./validation.ts";
+import { validateExecutionInput } from "./validation.ts";
 import { type ExecutionContextData, type ExecutorDeps, type SubagentParamsLike } from "./types.ts";
 
 
@@ -40,9 +38,9 @@ export function prepareExecution(input: {
 	nestedParentAddress: ReturnType<typeof resolveNestedParentAddressFromEnv>;
 	runId: string;
 	hasTasks: boolean;
-	hasChain: boolean;
-	hasSingle: boolean;
-	foregroundMode: "single" | "parallel" | "chain";
+	hasChain: false;
+	hasSingle: false;
+	foregroundMode: "single" | "parallel";
 	effectiveParams: SubagentParamsLike;
 	intercomBridge: IntercomBridgeState;
 } {
@@ -73,20 +71,10 @@ export function prepareExecution(input: {
 		depth,
 		deps.config.forceTopLevelAsync === true,
 	);
-	const foregroundTimeout = resolveForegroundTimeout(effectiveParams);
-	if (foregroundTimeout.error) return buildRequestedModeError(effectiveParams, foregroundTimeout.error);
-	const turnBudget = resolveTurnBudget(effectiveParams, deps.config);
-	if (turnBudget.error) return buildRequestedModeError(effectiveParams, turnBudget.error);
-	const runToolBudget = resolveToolBudget(effectiveParams.toolBudget, "toolBudget");
-	if (runToolBudget.error) return buildRequestedModeError(effectiveParams, runToolBudget.error);
-	const configToolBudget = resolveToolBudget(deps.config.toolBudget, "config.toolBudget");
-	if (configToolBudget.error) return buildRequestedModeError(effectiveParams, configToolBudget.error);
-
-	const scope: AgentScope = resolveExecutionAgentScope(effectiveParams.agentScope);
-	const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
+	const effectiveCwd = ctx.cwd;
 	const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 	deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
-	const discovered = deps.discoverAgents(effectiveCwd, scope);
+	const discovered = deps.discoverAgents(effectiveCwd, "both");
 	const discoveredAgents = discovered.agents;
 	const modelScope = discovered.modelScope;
 	const contextPolicy = resolveAgentDefaultContextPolicy(effectiveParams, discoveredAgents);
@@ -104,22 +92,11 @@ export function prepareExecution(input: {
 	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
 	const nestedParentAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
 	const nestedRoute = inheritedNestedRoute ?? createNestedRoute(runId);
-	const shareEnabled = effectiveParams.share === true;
-	const hasChain = (effectiveParams.chain?.length ?? 0) > 0;
 	const hasTasks = (effectiveParams.tasks?.length ?? 0) > 0;
-	const hasSingle = !hasChain && !hasTasks && Boolean(effectiveParams.agent);
-	const allowClarifyTaskPrompt = hasChain
-		&& effectiveParams.clarify === true
-		&& ctx.hasUI
-		&& !(effectiveParams.chain?.some(isParallelStep) ?? false);
 
 	const validationError = validateExecutionInput(
 		effectiveParams,
 		agents,
-		hasChain,
-		hasTasks,
-		hasSingle,
-		allowClarifyTaskPrompt,
 	);
 	if (validationError) return validationError;
 
@@ -132,10 +109,8 @@ export function prepareExecution(input: {
 	} catch (error) {
 		return toExecutionErrorResult(effectiveParams, error);
 	}
-	const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
-	const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
-	const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
-	const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
+	const effectiveAsync = effectiveParams.async ?? deps.asyncByDefault;
+	const controlConfig = resolveControlConfig(deps.config.control);
 
 	const artifactConfig: ArtifactConfig = {
 		...DEFAULT_ARTIFACT_CONFIG,
@@ -143,15 +118,10 @@ export function prepareExecution(input: {
 	};
 	const artifactsDir = getArtifactsDir(parentSessionFile, effectiveCwd);
 
-	let sessionRoot: string;
-	if (effectiveParams.sessionDir) {
-		sessionRoot = path.resolve(deps.expandTilde(effectiveParams.sessionDir));
-	} else {
-		const baseSessionRoot = deps.config.defaultSessionDir
-			? path.resolve(deps.expandTilde(deps.config.defaultSessionDir))
-			: deps.getSubagentSessionRoot(parentSessionFile);
-		sessionRoot = path.join(baseSessionRoot, runId);
-	}
+	const baseSessionRoot = deps.config.defaultSessionDir
+		? path.resolve(deps.expandTilde(deps.config.defaultSessionDir))
+		: deps.getSubagentSessionRoot(parentSessionFile);
+	const sessionRoot = path.join(baseSessionRoot, runId);
 	try {
 		fs.mkdirSync(sessionRoot, { recursive: true });
 	} catch (error) {
@@ -172,18 +142,16 @@ export function prepareExecution(input: {
 	const childSessionFileForIndex = (idx?: number) =>
 		path.join(sessionDirForIndex(idx), "session.jsonl");
 	try {
-		preflightForkSessionsForStaticTasks(effectiveParams, contextPolicy, forkSessionFileForTask, deps.config.chain?.dynamicFanout?.maxItems);
+		preflightForkSessionsForStaticTasks(effectiveParams, contextPolicy, forkSessionFileForTask);
 	} catch (error) {
 		return toExecutionErrorResult(effectiveParams, error);
 	}
-	const chainBindingsError = validateExecutionChainBindings(effectiveParams, deps.config.chain?.dynamicFanout?.maxItems);
-	if (chainBindingsError) return chainBindingsError;
 
 	const onUpdateWithContext = onUpdate
 		? (r: AgentToolResult<Details>) => onUpdate(withForkContext(r, effectiveParams.context))
 		: undefined;
 
-	const foregroundMode: "single" | "parallel" | "chain" = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+	const foregroundMode: "single" | "parallel" = hasTasks ? "parallel" : "single";
 	const spawnLimitError = reserveSubagentSpawns({
 		state: deps.state,
 		config: deps.config,
@@ -201,7 +169,6 @@ export function prepareExecution(input: {
 		onUpdate: onUpdateWithContext,
 		agents,
 		runId,
-		shareEnabled,
 		sessionRoot,
 		sessionDirForIndex,
 		sessionFileForIndex: childSessionFileForIndex,
@@ -209,15 +176,10 @@ export function prepareExecution(input: {
 		thinkingOverrideForTask: forkThinkingOverrideForTask,
 		artifactConfig,
 		artifactsDir,
-		backgroundRequestedWhileClarifying,
 		effectiveAsync,
 		controlConfig,
 		intercomBridge,
 		nestedRoute,
-		timeoutMs: foregroundTimeout.timeoutMs,
-		turnBudget: turnBudget.turnBudget,
-		toolBudget: runToolBudget.toolBudget,
-		configToolBudget: configToolBudget.toolBudget,
 		contextPolicy,
 		modelScope,
 	};
@@ -240,5 +202,5 @@ export function prepareExecution(input: {
 		deps.state.lastForegroundControlId = runId;
 	}
 
-	return { execData, foregroundControl, inheritedNestedRoute, nestedParentAddress, runId, hasTasks, hasChain, hasSingle, foregroundMode, effectiveParams, intercomBridge };
+	return { execData, foregroundControl, inheritedNestedRoute, nestedParentAddress, runId, hasTasks, hasChain: false as const, hasSingle: false as const, foregroundMode, effectiveParams, intercomBridge };
 }

@@ -10,7 +10,6 @@ import * as fs from "node:fs";
 import { cleanupForegroundRunRoot } from "../foreground-live-registry.ts";
 import { dispatchAction } from "./action-dispatch.ts";
 import { runAsyncPath } from "./async-path.ts";
-import { runChainPath } from "./chain-path.ts";
 import { resolveRequestedCwd } from "./foreground-state.ts";
 import { toExecutionErrorResult, withForkContext } from "./fork-helpers.ts";
 import { duplicateSubagentCallResult, omitExecutionModeActionAlias } from "./mode-helpers.ts";
@@ -49,7 +48,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (actionResult) return actionResult;
 		const prepared = prepareExecution({ deps, ctx, params: paramsWithResolvedCwd, signal, onUpdate });
 		if (!("execData" in prepared)) return prepared;
-		const { execData, foregroundControl, inheritedNestedRoute, nestedParentAddress, runId, hasTasks, hasChain, hasSingle, foregroundMode, effectiveParams, intercomBridge } = prepared;
+		const { execData, foregroundControl, inheritedNestedRoute, nestedParentAddress, runId, hasTasks, hasSingle, hasChain, foregroundMode, effectiveParams, intercomBridge } = prepared;
 		const writeNestedForegroundEvent = createNestedForegroundEventEmitter({
 			inheritedNestedRoute,
 			nestedParentAddress,
@@ -70,12 +69,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				writeNestedForegroundEvent("subagent.nested.started");
 				nestedForegroundStarted = true;
 			}
-			if (hasChain && effectiveParams.chain) {
-				const result = await runChainPath(execData, deps);
-				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return withForkContext(result, effectiveParams.context);
-			}
-			if (hasTasks && effectiveParams.tasks) {
+				if (hasTasks && effectiveParams.tasks) {
 				const result = await runParallelPath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
 				return withForkContext(result, effectiveParams.context);

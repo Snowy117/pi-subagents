@@ -7,7 +7,6 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { Usage, TurnBudgetState, ResolvedTurnBudget, ToolBudgetState, ResolvedToolBudget, CostSummary } from "./budget-types.ts";
 import type { ActivityState, ControlEvent } from "./control-types.ts";
-import type { AcceptanceLedger, AcceptanceLedgerStatus } from "./acceptance-types.ts";
 import type { ArtifactPaths } from "./options-types.ts";
 import type { PublicNestedRunSummary, NestedRunSummary } from "./nested-types.ts";
 import type { TruncationResult } from "./output-truncation.ts";
@@ -52,7 +51,7 @@ export interface WorkflowGraphNode {
 	itemKey?: string;
 	outputName?: string;
 	structured?: boolean;
-	acceptanceStatus?: AcceptanceLedgerStatus;
+
 	error?: string;
 }
 
@@ -181,7 +180,7 @@ export interface SingleResult {
 	structuredOutput?: unknown;
 	structuredOutputPath?: string;
 	structuredOutputSchemaPath?: string;
-	acceptance?: AcceptanceLedger;
+
 	transcriptPath?: string;
 	transcriptError?: string;
 	/** True when the child remains resident (Option B) and the live transcript is still live. */

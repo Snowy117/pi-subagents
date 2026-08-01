@@ -101,43 +101,6 @@ describe("agent management config parsing", () => {
 		assert.match(readText(created), /config\.package is invalid/);
 	});
 
-	it("creates and updates packaged chains while preserving packaged step names", () => {
-		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
-		fs.mkdirSync(path.join(tempDir, ".pi", "agents"), { recursive: true });
-		fs.writeFileSync(path.join(tempDir, ".pi", "agents", "code-analysis.scout.md"), `---
-name: scout
-package: code-analysis
-description: Fast recon
----
-
-Inspect
-`, "utf-8");
-
-		const created = handleCreate(
-			{ config: { name: "Review Flow", package: "Code Analysis", description: "Review flow", scope: "project", steps: [{ agent: "code-analysis.scout", task: "Inspect", toolBudget: { soft: 3, hard: 5, block: ["read"] } }] } },
-			ctx,
-		);
-		assert.equal(created.isError, false);
-		assert.match(readText(created), /Created chain 'code-analysis.review-flow'/);
-		const filePath = path.join(tempDir, ".pi", "chains", "code-analysis.review-flow.chain.md");
-		let content = fs.readFileSync(filePath, "utf-8");
-		assert.match(content, /^name: review-flow$/m);
-		assert.match(content, /^package: code-analysis$/m);
-		assert.match(content, /^## code-analysis\.scout$/m);
-		assert.match(content, /^toolBudget: \{"soft":3,"hard":5,"block":\["read"\]\}$/m);
-
-		const updated = handleUpdate(
-			{ chainName: "code-analysis.review-flow", config: { package: false } },
-			ctx,
-		);
-		assert.equal(updated.isError, false);
-		const updatedPath = path.join(tempDir, ".pi", "chains", "review-flow.chain.md");
-		assert.equal(fs.existsSync(filePath), false);
-		content = fs.readFileSync(updatedPath, "utf-8");
-		assert.match(content, /^name: review-flow$/m);
-		assert.doesNotMatch(content, /^package:/m);
-	});
-
 	it("creates and updates agents with tool budgets", () => {
 		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
 		const result = handleCreate(
@@ -171,13 +134,6 @@ Inspect
 		);
 		assert.equal(agentResult.isError, true);
 		assert.match(readText(agentResult), /config\.toolBudget\.soft must be <= config\.toolBudget\.hard/);
-
-		const chainResult = handleCreate(
-			{ config: { name: "bad-chain-budget", description: "Bad budget", scope: "project", steps: [{ agent: "reviewer", toolBudget: { hard: 2, block: [] } }] } },
-			ctx,
-		);
-		assert.equal(chainResult.isError, true);
-		assert.match(readText(chainResult), /config\.steps\[0\]\.toolBudget\.block must contain at least one tool name/);
 	});
 
 	it("creates agents with completion guard disabled", () => {

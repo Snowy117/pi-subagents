@@ -158,14 +158,6 @@ describe("SubagentParams schema", () => {
 		const taskCountSchema = taskSchema?.count;
 		assert.ok(taskCountSchema, "tasks[].count schema should exist");
 		assert.equal(taskCountSchema.minimum, 1);
-		const outputSchema = taskSchema?.output as JsonSchemaNode | undefined;
-		assert.equal(outputSchema?.type, undefined);
-		assert.equal(hasAnyOfType(outputSchema, "string"), true);
-		assert.equal(hasAnyOfType(outputSchema, "boolean"), true);
-		const readsSchema = taskSchema?.reads as JsonSchemaNode | undefined;
-		assert.equal(readsSchema?.type, undefined);
-		assert.equal(hasAnyOfArrayWithStringItems(readsSchema), true);
-		assert.equal(hasAnyOfType(readsSchema, "boolean"), true);
 		assert.equal(taskSchema?.progress?.type, "boolean");
 
 		const concurrencySchema = SubagentParams?.properties?.concurrency;
@@ -182,8 +174,6 @@ describe("SubagentParams schema", () => {
 		const description = String(actionSchema.description ?? "");
 		assert.match(description, /Management\/control action only/);
 		assert.match(description, /Must be omitted for execution mode/);
-		assert.match(description, /single, parallel, or chain/);
-		assert.doesNotMatch(description, /orchestration\./);
 	});
 
 	it("includes foreground timeout aliases and turn budget", () => {
@@ -191,18 +181,10 @@ describe("SubagentParams schema", () => {
 		const maxRuntimeSchema = SubagentParams?.properties?.maxRuntimeMs;
 		const turnBudgetSchema = SubagentParams?.properties?.turnBudget;
 		const toolBudgetSchema = SubagentParams?.properties?.toolBudget;
-		assert.ok(timeoutSchema, "timeoutMs schema should exist");
-		assert.ok(maxRuntimeSchema, "maxRuntimeMs schema should exist");
-		assert.equal(timeoutSchema.minimum, 1);
-		assert.equal(maxRuntimeSchema.minimum, 1);
-		assert.match(String(timeoutSchema.description ?? ""), /foreground and async\/background/i);
-		assert.doesNotMatch(String(timeoutSchema.description ?? ""), /foreground-only/i);
-		assert.match(String(maxRuntimeSchema.description ?? ""), /timeoutMs/i);
-		assert.match(String(maxRuntimeSchema.description ?? ""), /foreground and async\/background/i);
-		assert.equal(turnBudgetSchema?.properties?.maxTurns?.minimum, 1);
-		assert.equal(turnBudgetSchema?.properties?.graceTurns?.minimum, 0);
-		assert.equal(toolBudgetSchema?.properties?.soft?.minimum, 1);
-		assert.equal(toolBudgetSchema?.properties?.hard?.minimum, 1);
+		assert.equal(timeoutSchema, undefined, "timeoutMs should be removed from dispatch params");
+		assert.equal(maxRuntimeSchema, undefined, "maxRuntimeMs should be removed");
+		assert.equal(turnBudgetSchema, undefined, "turnBudget should be removed");
+		assert.equal(toolBudgetSchema, undefined, "toolBudget should be removed");
 	});
 
 	it("includes subagent control fields", () => {
@@ -212,20 +194,12 @@ describe("SubagentParams schema", () => {
 		assert.match(String(idSchema.description ?? ""), /status/i);
 		assert.match(String(idSchema.description ?? ""), /interrupt/i);
 		assert.match(String(idSchema.description ?? ""), /steer/i);
-		assert.match(String(idSchema.description ?? ""), /append-step/i);
 
 		const runIdSchema = SubagentParams?.properties?.runId;
-		assert.ok(runIdSchema, "runId schema should exist");
-		assert.equal(runIdSchema.type, "string");
-		assert.match(String(runIdSchema.description ?? ""), /interrupt/i);
-		assert.match(String(runIdSchema.description ?? ""), /steer/i);
-		assert.match(String(runIdSchema.description ?? ""), /append-step/i);
+		assert.equal(runIdSchema, undefined, "runId should be removed (use id instead)");
 
 		const dirSchema = SubagentParams?.properties?.dir;
-		assert.ok(dirSchema, "dir schema should exist");
-		assert.equal(dirSchema.type, "string");
-		assert.match(String(dirSchema.description ?? ""), /status/i);
-		assert.match(String(dirSchema.description ?? ""), /steer/i);
+		assert.equal(dirSchema, undefined, "dir should be removed");
 
 		const viewSchema = SubagentParams?.properties?.view;
 		assert.ok(viewSchema, "view schema should exist");
@@ -241,14 +215,7 @@ describe("SubagentParams schema", () => {
 		assert.match(String(linesSchema.description ?? ""), /transcript/i);
 
 		const controlSchema = SubagentParams?.properties?.control;
-		assert.ok(controlSchema, "control schema should exist");
-		assert.equal(controlSchema.properties?.needsAttentionAfterMs?.minimum, 1);
-		assert.equal(controlSchema.properties?.activeNoticeAfterMs?.minimum, 1);
-		assert.equal(controlSchema.properties?.activeNoticeAfterTurns?.minimum, 1);
-		assert.equal(controlSchema.properties?.activeNoticeAfterTokens?.minimum, 1);
-		assert.equal(controlSchema.properties?.failedToolAttemptsBeforeAttention?.minimum, 1);
-		assert.deepEqual(controlSchema.properties?.notifyOn?.items?.enum, ["active_long_running", "needs_attention"]);
-		assert.deepEqual(controlSchema.properties?.notifyChannels?.items?.enum, ["event", "async", "intercom"]);
+		assert.equal(controlSchema, undefined, "control should be removed from dispatch params");
 	});
 
 	it("does not emit description-only schema nodes", () => {

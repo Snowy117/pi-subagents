@@ -1,9 +1,9 @@
-import * as path from "node:path";
-import { parseSessionTokens } from "../../../shared/session-tokens.ts";
 import { buildControlEvent } from "../../shared/subagent-control.ts";
+
+import { parseSessionTokens } from "../../../shared/session-tokens.ts";
 import { resolveEffectiveThinking } from "../../../shared/model-info.ts";
 import type { RunnerSubagentStep } from "../../shared/parallel-utils.ts";
-import { outputEntryFromAsyncResult } from "../../shared/chain-outputs.ts";
+import * as path from "node:path";
 import { appendJsonl } from "./event-logging.ts";
 import { resetStepLiveDetail, tokenUsageFromAttempts } from "./usage-helpers.ts";
 import { stepSteerInboxDir } from "../control-channel.ts";
@@ -63,7 +63,6 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 		turnBudget: state.config.turnBudget,
 		onAttemptStart: (attempt) => ops.updateStepModel(flatIndex, attempt.model, attempt.thinking),
 		onChildEvent: (event) => ops.updateStepFromChildEvent(flatIndex, event),
-		skipAcceptance: () => state.timedOut,
 	});
 	if (seqStep.sessionFile) {
 		state.latestSessionFile = seqStep.sessionFile;
@@ -88,7 +87,6 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 		structuredOutput: singleResult.structuredOutput,
 		structuredOutputPath: singleResult.structuredOutputPath,
 		structuredOutputSchemaPath: singleResult.structuredOutputSchemaPath,
-		acceptance: singleResult.acceptance,
 		interrupted: singleResult.interrupted,
 		timedOut: state.timedOut || singleResult.timedOut ? true : undefined,
 		turnBudget: singleResult.turnBudget,
@@ -98,11 +96,12 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 		toolBudgetBlocked: singleResult.toolBudgetBlocked,
 	});
 	if (seqStep.outputName) {
-		state.outputs[seqStep.outputName] = outputEntryFromAsyncResult({
+		state.outputs[seqStep.outputName] = {
+			text: singleResult.structuredOutput !== undefined ? JSON.stringify(singleResult.structuredOutput) : singleResult.output,
+			...(singleResult.structuredOutput !== undefined ? { structured: singleResult.structuredOutput } : {}),
 			agent: singleResult.agent,
-			output: singleResult.output,
-			structuredOutput: singleResult.structuredOutput,
-		}, stepIndex);
+			stepIndex,
+		};
 	}
 	state.statusPayload.outputs = state.outputs;
 
@@ -155,7 +154,6 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 	state.statusPayload.steps[flatIndex].structuredOutput = singleResult.structuredOutput;
 	state.statusPayload.steps[flatIndex].structuredOutputPath = singleResult.structuredOutputPath;
 	state.statusPayload.steps[flatIndex].structuredOutputSchemaPath = singleResult.structuredOutputSchemaPath;
-	state.statusPayload.steps[flatIndex].acceptance = singleResult.acceptance;
 	if (stepTokens) {
 		state.statusPayload.steps[flatIndex].tokens = stepTokens;
 		state.statusPayload.totalTokens = { ...state.previousCumulativeTokens };

@@ -1,6 +1,6 @@
 /** parallel-helpers (split from subagent-executor.ts; internal-only). */
 
-import { type ChainStep, type ResolvedStepBehavior, isParallelStep } from "../../../shared/settings.ts";
+import { type ResolvedStepBehavior } from "../../../shared/settings.ts";
 import { type Details, type ExtensionConfig } from "../../../shared/types.ts";
 import { resolveChildCwd } from "../../../shared/utils.ts";
 import { resolveSingleOutputPath } from "../../shared/single-output.ts";
@@ -60,20 +60,6 @@ export function resolveSingleRunOutputBaseDir(deps: ExecutorDeps, artifactsDir: 
 	return deps.config.singleRunOutputBaseDir
 		? path.resolve(deps.expandTilde(deps.config.singleRunOutputBaseDir))
 		: path.join(artifactsDir, "outputs", runId);
-}
-
-
-export function buildChainWorktreeTaskCwdError(chain: ChainStep[], sharedCwd: string): string | undefined {
-	for (let stepIndex = 0; stepIndex < chain.length; stepIndex++) {
-		const step = chain[stepIndex]!;
-		if (!isParallelStep(step) || !step.worktree) continue;
-		const stepCwd = resolveChildCwd(sharedCwd, step.cwd);
-		const conflict = findWorktreeTaskCwdConflict(step.parallel, stepCwd);
-		if (!conflict) continue;
-		const detail = formatWorktreeTaskCwdConflict(conflict, stepCwd);
-		return `parallel chain step ${stepIndex + 1}: ${detail}`;
-	}
-	return undefined;
 }
 
 

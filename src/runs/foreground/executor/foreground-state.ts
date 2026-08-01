@@ -1,7 +1,6 @@
 /** foreground-state (split from subagent-executor.ts; internal-only). */
 
 import { resolveSubagentResultStatus } from "../../../intercom/result-intercom.ts";
-import { getStepAgents, isDynamicParallelStep } from "../../../shared/settings.ts";
 import { type Details, type ExtensionConfig, type SingleResult, type SubagentState, resolveMaxSubagentSpawnsPerSession } from "../../../shared/types.ts";
 import { type NestedRunResolutionScope, resolveInheritedNestedRouteFromEnv, resolveNestedParentAddressFromEnv, updateForegroundNestedProjection } from "../../shared/nested-events.ts";
 import { formatNestedRunStatusLines } from "../../shared/nested-render.ts";
@@ -90,12 +89,6 @@ export function reserveSubagentSpawns(input: { state: SubagentState; config: Ext
 
 export function countRequestedSubagentSpawns(params: SubagentParamsLike, config: ExtensionConfig): number {
 	if (params.tasks) return params.tasks.length;
-	if (params.chain) {
-		return params.chain.reduce((total, step) => {
-			if (isDynamicParallelStep(step)) return total + (step.expand.maxItems ?? config.chain?.dynamicFanout?.maxItems ?? 0);
-			return total + getStepAgents(step).length;
-		}, 0);
-	}
 	return params.agent ? 1 : 0;
 }
 

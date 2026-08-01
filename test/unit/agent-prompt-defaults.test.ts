@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { handleManagementAction } from "../../src/agents/agent-management.ts";
 import { serializeAgent } from "../../src/agents/agent-serializer.ts";
-import { parseChain, serializeChain } from "../../src/agents/chain-serializer.ts";
 import { discoverAgents, discoverAgentsAll, type AgentConfig } from "../../src/agents/agents.ts";
 import { buildPiArgs } from "../../src/runs/shared/pi-args.ts";
 import { THINKING_LEVELS } from "../../src/shared/model-info.ts";

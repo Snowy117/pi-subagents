@@ -4,13 +4,11 @@ import { evaluateCompletionMutationGuard } from "../../shared/completion-guard.t
 import type { SingleResult } from "../../../shared/types.ts";
 import type { SingleAttemptState } from "./single-attempt-state.ts";
 import {
-	acceptanceOutputByResult,
 	artifactOutputByResult,
 	formatTimeoutMessage,
 	snapshotProgress,
 	snapshotResult,
 } from "./attempt-helpers.ts";
-import { stripAcceptanceReport } from "../../shared/acceptance.ts";
 import { formatSavedOutputReference, resolveSingleOutput } from "../../shared/single-output.ts";
 import { formatTurnBudgetOutput, turnBudgetExceededMessage, turnBudgetSoftNote } from "../../shared/turn-budget.ts";
 import { detectSubagentError, getFinalOutput } from "../../../shared/utils.ts";
@@ -104,8 +102,7 @@ export function finalizeSingleAttempt(state: SingleAttemptState, exitCode: numbe
 		durationMs: progress.durationMs,
 	};
 
-	const acceptanceOutput = getFinalOutput(result.messages ?? []);
-	let fullOutput = stripAcceptanceReport(acceptanceOutput);
+	const fullOutput = getFinalOutput(result.messages ?? []);
 	if (result.timedOut) {
 		const timeoutMessage = formatTimeoutMessage(options.timeoutMs ?? 0);
 		fullOutput = fullOutput.trim()
@@ -144,7 +141,7 @@ export function finalizeSingleAttempt(state: SingleAttemptState, exitCode: numbe
 	}
 	if (options.outputPath && result.exitCode === 0) {
 		const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
-		fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
+		fullOutput = resolvedOutput.fullOutput;
 		result.savedOutputPath = resolvedOutput.savedPath;
 		result.outputSaveError = resolvedOutput.saveError;
 		if (resolvedOutput.savedPath) {
@@ -152,7 +149,6 @@ export function finalizeSingleAttempt(state: SingleAttemptState, exitCode: numbe
 		}
 	}
 	artifactOutputByResult.set(result, fullOutput);
-	acceptanceOutputByResult.set(result, acceptanceOutput);
 	result.outputMode = options.outputMode ?? "inline";
 	result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
 		? result.outputReference.message

@@ -3,7 +3,6 @@ import { writeAtomicJson } from "../../../shared/atomic-json.ts";
 import { turnBudgetExceededMessage } from "../../shared/turn-budget.ts";
 import { DEFAULT_MAX_OUTPUT, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, truncateOutput, type CostSummary } from "../../../shared/types.ts";
 import { findLatestSessionFile } from "./usage-helpers.ts";
-import { createShareLink, exportSessionHtml } from "./share-export.ts";
 import { writeRunLog } from "./run-log.ts";
 import { appendJsonl } from "./event-logging.ts";
 import type { RunnerOps } from "./runner-ops.ts";
@@ -38,36 +37,7 @@ export async function finalizeRun(state: RunnerState, ops: RunnerOps, disposeCon
 			? `parallel:${finalFlatAgents.join("+")}`
 			: `chain:${finalFlatAgents.join("->")}`;
 	let sessionFile: string | undefined;
-	let shareUrl: string | undefined;
-	let gistUrl: string | undefined;
-	let shareError: string | undefined;
-
-	if (state.shareEnabled) {
-		sessionFile = config.sessionDir
-			? (findLatestSessionFile(config.sessionDir) ?? undefined)
-			: undefined;
-		if (!sessionFile && state.latestSessionFile) {
-			sessionFile = state.latestSessionFile;
-		}
-		if (sessionFile) {
-			try {
-				const exportDir = config.sessionDir ?? path.dirname(sessionFile);
-				const htmlPath = await exportSessionHtml(sessionFile, exportDir, config.piPackageRoot);
-				const share = createShareLink(htmlPath);
-				if ("error" in share) shareError = share.error;
-				else {
-					shareUrl = share.shareUrl;
-					gistUrl = share.gistUrl;
-				}
-			} catch (err) {
-				shareError = String(err);
-			}
-		} else {
-			shareError = "Session file not found.";
-		}
-	}
-
-	if (state.activityTimer) {
+if (state.activityTimer) {
 		clearInterval(state.activityTimer);
 		state.activityTimer = undefined;
 	}
@@ -92,9 +62,6 @@ export async function finalizeRun(state: RunnerState, ops: RunnerOps, disposeCon
 	statusPayload.lastUpdate = runEndedAt;
 	statusPayload.sessionFile = effectiveSessionFile;
 	statusPayload.totalCost = finalTotalCost;
-	statusPayload.shareUrl = shareUrl;
-	statusPayload.gistUrl = gistUrl;
-	statusPayload.shareError = shareError;
 	if (statusPayload.state === "failed" && !statusPayload.error) {
 		const failedStep = statusPayload.steps.find((s) => s.status === "failed");
 		if (failedStep?.agent) {
@@ -130,8 +97,6 @@ export async function finalizeRun(state: RunnerState, ops: RunnerOps, disposeCon
 		truncated,
 		artifactsDir: state.artifactsDir,
 		sessionFile: effectiveSessionFile,
-		shareUrl,
-		shareError,
 	});
 
 	try {
@@ -177,7 +142,6 @@ export async function finalizeRun(state: RunnerState, ops: RunnerOps, disposeCon
 				structuredOutput: r.structuredOutput,
 				structuredOutputPath: r.structuredOutputPath,
 				structuredOutputSchemaPath: r.structuredOutputSchemaPath,
-				acceptance: r.acceptance,
 			})),
 			outputs: state.outputs,
 			workflowGraph: statusPayload.workflowGraph,
@@ -193,9 +157,6 @@ export async function finalizeRun(state: RunnerState, ops: RunnerOps, disposeCon
 			sessionId: config.sessionId,
 			sessionFile: effectiveSessionFile,
 			intercomTarget: config.controlIntercomTarget,
-			shareUrl,
-			gistUrl,
-			shareError,
 			...(state.taskIndex !== undefined && { taskIndex: state.taskIndex }),
 			...(state.totalTasks !== undefined && { totalTasks: state.totalTasks }),
 		});

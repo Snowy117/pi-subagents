@@ -1,7 +1,7 @@
 /** parallel-path (split from subagent-executor.ts; internal-only). */
 
 import { type AgentConfig } from "../../../agents/agents.ts";
-import { discoverAvailableSkills, normalizeSkillInput } from "../../../agents/skills.ts";
+import { normalizeSkillInput } from "../../../agents/skills.ts";
 import { resolveSubagentIntercomTarget } from "../../../intercom/intercom-bridge.ts";
 import { type ModelInfo, toModelInfo } from "../../../shared/model-info.ts";
 import { type StepOverrides, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile } from "../../../shared/settings.ts";
@@ -12,13 +12,12 @@ import { attachRootChildrenToSteps, updateForegroundNestedProjection } from "../
 import { recordRun } from "../../shared/run-history.ts";
 import { resolveSingleOutputPath, validateFileOnlyOutputMode } from "../../shared/single-output.ts";
 import { cleanupWorktrees } from "../../shared/worktree.ts";
-import { type ChainClarifyResult, ChainClarifyComponent } from ".././chain-clarify.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
-import { resolveEffectiveToolBudget, shouldForkAgent } from "./budget-resolution.ts";
+import { shouldForkAgent } from "./budget-resolution.ts";
 import { rememberForegroundRun } from "./foreground-state.ts";
 import { createForegroundControlNotifier, maybeBuildForegroundIntercomReceipt } from "./intercom-result.ts";
 import { buildParallelModeError, buildParallelWorktreeTaskCwdError, createParallelWorktreeSetup, findDuplicateParallelOutputPath, resolveParallelTaskCwd } from "./parallel-helpers.ts";
-import { buildForegroundParallelRunInput, buildParallelSuccessResult, dispatchParallelBackgroundFromClarify } from "./parallel-path-helpers.ts";
+import { buildForegroundParallelRunInput, buildParallelSuccessResult } from "./parallel-path-helpers.ts";
 import { runForegroundParallelTasks } from "./parallel-tasks.ts";
 import { type ExecutionContextData, type ExecutorDeps } from "./types.ts";
 import * as path from "node:path";
@@ -69,9 +68,7 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 	);
 	const toolBudgets: (ResolvedToolBudget | undefined)[] = [];
 	for (let index = 0; index < tasks.length; index++) {
-		const resolved = resolveEffectiveToolBudget({ stepBudget: tasks[index]?.toolBudget, runBudget: data.toolBudget, agentBudget: agentConfigs[index]?.toolBudget, configBudget: data.configToolBudget });
-		if (resolved.error) return buildParallelModeError(resolved.error);
-		toolBudgets.push(resolved.toolBudget);
+		toolBudgets.push(undefined);
 	}
 
 	if (params.worktree) {
@@ -96,58 +93,6 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 	const modelOverrides: (string | undefined)[] = tasks.map((_, i) =>
 		resolveSubagentModelOverride(behaviorOverrides[i]?.model ?? agentConfigs[i]?.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope, source: behaviorOverrides[i]?.model ? "explicit" : "inherited" }),
 	);
-
-	if (params.clarify === true && ctx.hasUI) {
-		const behaviors = agentConfigs.map((c, i) =>
-			resolveStepBehavior(c, behaviorOverrides[i]!),
-		);
-		const availableSkills = discoverAvailableSkills(effectiveCwd);
-
-		const result = await ctx.ui.custom<ChainClarifyResult>(
-			(tui, theme, _kb, done) =>
-				new ChainClarifyComponent(
-					tui, theme,
-					agentConfigs,
-					taskTexts,
-					"",
-					undefined,
-					behaviors,
-					availableModels,
-					currentProvider,
-					availableSkills,
-					done,
-					"parallel",
-				),
-			{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
-		);
-
-		if (!result || !result.confirmed) {
-			return { content: [{ type: "text", text: "Cancelled" }], details: { mode: "parallel", results: [] } };
-		}
-
-		taskTexts = result.templates;
-		for (let i = 0; i < result.behaviorOverrides.length; i++) {
-			const override = result.behaviorOverrides[i];
-			if (override?.model) {
-				modelOverrides[i] = resolveSubagentModelOverride(override.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope, source: "explicit" });
-				behaviorOverrides[i]!.model = override.model;
-			}
-			if (override?.output !== undefined) behaviorOverrides[i]!.output = override.output;
-			if (override?.reads !== undefined) behaviorOverrides[i]!.reads = override.reads;
-			if (override?.progress !== undefined) behaviorOverrides[i]!.progress = override.progress;
-			if (override?.skills !== undefined) {
-				skillOverrides[i] = override.skills;
-				behaviorOverrides[i]!.skills = override.skills;
-			}
-		}
-
-		if (result.runInBackground) {
-			return dispatchParallelBackgroundFromClarify(data, deps, {
-				taskTexts, behaviorOverrides, modelOverrides, skillOverrides,
-				availableModels, parallelConcurrency, currentMaxSubagentDepth,
-			});
-		}
-	}
 
 	const behaviors = agentConfigs.map((config, index) => suppressProgressForReadOnlyTask(resolveStepBehavior(config, behaviorOverrides[index]!), taskTexts[index]));
 	const firstProgressIndex = behaviors.findIndex((behavior) => behavior.progress);

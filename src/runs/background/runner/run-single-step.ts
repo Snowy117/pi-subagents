@@ -1,11 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { detectSubagentError, extractTextFromContent } from "../../../shared/utils.ts";
-import { resolveOutputReferences } from "../../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime, readStructuredOutput } from "../../shared/structured-output.ts";
 import { getArtifactPaths } from "../../../shared/artifacts.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../../shared/child-transcript.ts";
-import { acceptanceFailureMessage, evaluateAcceptance, formatAcceptancePrompt, stripAcceptanceReport } from "../../shared/acceptance.ts";
 import { cleanupTempDir } from "../../shared/pi-args.ts";
 import { resolveEffectiveThinking } from "../../../shared/model-info.ts";
 import { runPiStreaming } from "./run-pi-streaming.ts";
@@ -18,7 +16,7 @@ import { isTerminalAssistantStop } from "./usage-helpers.ts";
 import type { ArtifactPaths, ModelAttempt, ToolBudgetState, TurnBudgetState } from "../../../shared/types.ts";
 import type { RunPiStreamingResult, SingleStepContext } from "./types.ts";
 import type { RunnerSubagentStep as SubagentStep } from "../../shared/parallel-utils.ts";
-import { buildSingleStepResult, buildStepPiArgs, runImportedAsyncRootStep, writeStepArtifactFiles } from "./run-single-step-helpers.ts";
+import { buildSingleStepResult, buildStepPiArgs, writeStepArtifactFiles } from "./run-single-step-helpers.ts";
 
 /** Run a single pi agent step, returning output and metadata */
 export async function runSingleStep(
@@ -48,7 +46,6 @@ export async function runSingleStep(
 	structuredOutput?: unknown;
 	structuredOutputPath?: string;
 	structuredOutputSchemaPath?: string;
-	acceptance?: import("../../../shared/types.ts").AcceptanceLedger;
 }> {
 	const importedResult = await runImportedAsyncRootStep(step, ctx);
 	if (importedResult) return importedResult;
@@ -58,12 +55,7 @@ export async function runSingleStep(
 		: undefined);
 	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 	let task = step.task.replace(placeholderRegex, () => ctx.previousOutput);
-	task = resolveOutputReferences(task, ctx.outputs ?? {});
 	const taskForCompletionGuard = task;
-	if (step.effectiveAcceptance) {
-		const acceptancePrompt = formatAcceptancePrompt(step.effectiveAcceptance);
-		if (acceptancePrompt) task = `${task}\n${acceptancePrompt}`;
-	}
 	const sessionEnabled = Boolean(step.sessionFile) || ctx.sessionEnabled;
 	const sessionDir = step.sessionFile ? undefined : ctx.sessionDir;
 
@@ -106,7 +98,7 @@ export async function runSingleStep(
 	let toolBudgetBlocked = false;
 
 	for (let index = 0; index < candidates.length; index++) {
-		if (ctx.timeoutSignal?.aborted || ctx.skipAcceptance?.()) break;
+		if (ctx.timeoutSignal?.aborted) break;
 		const candidate = candidates[index];
 		ctx.onAttemptStart?.({ model: candidate, thinking: resolveEffectiveThinking(candidate, step.thinking) });
 		const outputSnapshot = captureSingleOutputSnapshot(step.outputPath);
@@ -222,32 +214,30 @@ export async function runSingleStep(
 		}
 		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error, structuredOutput } as RunPiStreamingResult & { structuredOutput?: unknown };
 		if (run.turnBudgetExceeded) break;
-		if (run.timedOut || ctx.timeoutSignal?.aborted || ctx.skipAcceptance?.()) break;
+		if (run.timedOut || ctx.timeoutSignal?.aborted) break;
 		if (attempt.success || completionGuardTriggered) break;
 		if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
 		attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
 	}
 
 	const rawOutput = finalResult?.finalOutput ?? "";
-	const outputForPersistence = stripAcceptanceReport(rawOutput);
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
-		? resolveSingleOutput(step.outputPath, outputForPersistence, finalOutputSnapshot)
-		: { fullOutput: outputForPersistence };
+		? resolveSingleOutput(step.outputPath, rawOutput, finalOutputSnapshot)
+		: { fullOutput: rawOutput };
 	const output = resolvedOutput.fullOutput;
 	const outputReference = resolvedOutput.savedPath ? formatSavedOutputReference(resolvedOutput.savedPath, output) : undefined;
 	let outputForSummary = output;
-		if (attemptNotes.length > 0) {
-			outputForSummary = `${attemptNotes.join("\n")}\n\n${outputForSummary}`.trim();
-		}
+	if (attemptNotes.length > 0) {
+		outputForSummary = `${attemptNotes.join("\n")}\n\n${outputForSummary}`.trim();
+	}
 	if (!finalResult?.timedOut && finalResult?.turnBudgetExceeded && turnBudget) {
 		outputForSummary = formatTurnBudgetOutput(turnBudgetExceededMessage(turnBudget, turnBudget.turnCount), outputForSummary);
 	} else if (!finalResult?.timedOut && turnBudget?.outcome === "wrap-up-requested") {
 		const note = turnBudgetSoftNote(turnBudget, turnBudget.wrapUpRequestedAtTurn ?? turnBudget.turnCount);
 		outputForSummary = outputForSummary.trim() ? `${note}\n\n${outputForSummary}` : note;
 	}
-	const outputForAcceptance = rawOutput;
-		const finalizedOutput = finalizeSingleOutput({
-			fullOutput: outputForSummary,
+	const finalizedOutput = finalizeSingleOutput({
+		fullOutput: outputForSummary,
 		outputPath: step.outputPath,
 		outputMode: step.outputMode,
 		exitCode: finalResult?.exitCode ?? 1,
@@ -256,28 +246,12 @@ export async function runSingleStep(
 		saveError: resolvedOutput.saveError,
 	});
 	outputForSummary = finalizedOutput.displayOutput;
-	const acceptance = step.effectiveAcceptance && !finalResult?.turnBudgetExceeded && !ctx.timeoutSignal?.aborted && !ctx.skipAcceptance?.()
-			? await evaluateAcceptance({
-				acceptance: step.effectiveAcceptance,
-				output: outputForAcceptance,
-				cwd: step.cwd ?? ctx.cwd,
-				signal: ctx.timeoutSignal,
-				abortMessage: ctx.timeoutMessage ?? "Subagent timed out.",
-			})
-		: undefined;
-	const timedOutAfterAcceptance = finalResult?.timedOut === true || ctx.timeoutSignal?.aborted === true || ctx.skipAcceptance?.() === true;
-	const turnBudgetExceeded = finalResult?.turnBudgetExceeded === true;
-	const effectiveAcceptance = timedOutAfterAcceptance || turnBudgetExceeded ? undefined : acceptance;
-	const acceptanceFailure = effectiveAcceptance ? acceptanceFailureMessage(effectiveAcceptance) : undefined;
-	const acceptanceCanFailRun = acceptanceFailure && effectiveAcceptance?.explicit && (finalResult?.exitCode ?? 1) === 0 && !finalResult?.interrupted && !timedOutAfterAcceptance && !turnBudgetExceeded;
-	const effectiveFinalExitCode = timedOutAfterAcceptance || turnBudgetExceeded ? 1 : acceptanceCanFailRun ? 1 : finalResult?.exitCode ?? 1;
-	const effectiveFinalError = timedOutAfterAcceptance
+	const effectiveFinalExitCode = finalResult?.exitCode ?? 1;
+	const effectiveFinalError = finalResult?.timedOut === true
 		? ctx.timeoutMessage ?? "Subagent timed out."
-		: turnBudgetExceeded
+		: finalResult?.turnBudgetExceeded
 			? finalResult?.error ?? (turnBudget ? turnBudgetExceededMessage(turnBudget, turnBudget.turnCount) : "Subagent exceeded turn budget.")
-			: acceptanceCanFailRun
-				? (finalResult?.error ? `${finalResult.error}\n${acceptanceFailure}` : acceptanceFailure)
-				: finalResult?.error;
+			: finalResult?.error;
 
 	if (artifactPaths) writeStepArtifactFiles({
 		artifactPaths, ctx, step, output, effectiveFinalExitCode,
@@ -287,9 +261,9 @@ export async function runSingleStep(
 	return buildSingleStepResult({
 		step, ctx, outputForSummary, effectiveFinalExitCode, effectiveFinalError,
 		attemptedModels, modelAttempts, artifactPaths, transcriptWriter,
-		timedOutAfterAcceptance, turnBudgetExceeded, finalResult, turnBudget,
+		finalResult, turnBudget,
 		toolBudget, toolBudgetBlocked, completionGuardTriggeredFinal,
-		effectiveStructuredOutput, effectiveAcceptance,
+		effectiveStructuredOutput,
 	});
 }
 

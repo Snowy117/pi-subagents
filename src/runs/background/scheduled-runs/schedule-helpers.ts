@@ -98,29 +98,24 @@ export function resolveJobById(jobs: ScheduledRunJob[], requestedId: string): Sc
 }
 
 export function sanitizeScheduledParams(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: string } {
-	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
-	const hasSingle = !hasChain && !hasTasks && Boolean(params.agent);
-	if (Number(hasChain) + Number(hasTasks) + Number(hasSingle) !== 1) {
-		return { error: "action='schedule' requires exactly one execution mode: agent, tasks, or chain." };
+	const hasSingle = !hasTasks && Boolean(params.agent);
+	if (!hasTasks && !hasSingle) {
+		return { error: "action='schedule' requires exactly one execution mode: agent or tasks." };
 	}
 	if (!params.schedule?.trim()) return { error: "action='schedule' requires schedule, such as '+10m' or a future ISO timestamp." };
 	if (params.context === "fork") return { error: "Scheduled subagent runs require fresh context. Forked parent-session context is not safe at fire time." };
 	if (params.async === false) return { error: "Scheduled subagent runs are always async; omit async or set async: true." };
-	if (params.clarify === true) return { error: "Scheduled subagent runs cannot open clarify UI; omit clarify or set clarify: false." };
 
 	const {
 		action: _action,
 		id: _id,
-		runId: _runId,
-		dir: _dir,
 		index: _index,
 		message: _message,
-		chainName: _chainName,
 		config: _config,
 		schedule: _schedule,
 		scheduleName: _scheduleName,
 		...executionParams
 	} = params;
-	return { params: { ...executionParams, async: true, clarify: false, context: "fresh" } };
+	return { params: { ...executionParams, async: true, context: "fresh" } };
 }

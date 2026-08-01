@@ -86,7 +86,7 @@ describe("PI_CODING_AGENT_DIR runtime paths", () => {
 		assert.equal(config.maxSubagentDepth, 3);
 	});
 
-	it("discovers user agents, chains, and settings under the configured agent dir", () => {
+	it("discovers user agents and settings under the configured agent dir", () => {
 		const settingsPath = path.join(agentDir, "settings.json");
 		writeFile(path.join(agentDir, "agents", "env-agent.md"), `---
 name: env-agent
@@ -94,15 +94,6 @@ description: Env agent
 ---
 
 Use env agent.
-`);
-		writeFile(path.join(agentDir, "chains", "env-chain.chain.md"), `---
-name: env-chain
-description: Env chain
----
-
-## env-agent
-
-Inspect env.
 `);
 		writeFile(settingsPath, JSON.stringify({
 			subagents: {
@@ -114,10 +105,8 @@ Inspect env.
 
 		const discovered = discoverAgentsAll(cwd);
 		assert.equal(discovered.userDir, path.join(agentDir, "agents"));
-		assert.equal(discovered.userChainDir, path.join(agentDir, "chains"));
 		assert.equal(discovered.userSettingsPath, settingsPath);
 		assert.ok(discovered.user.find((agent) => agent.name === "env-agent" && agent.filePath === path.join(agentDir, "agents", "env-agent.md")));
-		assert.ok(discovered.chains.find((chain) => chain.name === "env-chain" && chain.filePath === path.join(agentDir, "chains", "env-chain.chain.md")));
 
 		const worker = discovered.builtin.find((agent) => agent.name === "worker");
 		assert.equal(worker?.systemPrompt, "Use env-rooted settings.");

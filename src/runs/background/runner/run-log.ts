@@ -26,9 +26,7 @@ export function writeRunLog(
 		truncated: boolean;
 		artifactsDir?: string;
 		sessionFile?: string;
-		shareUrl?: string;
-		shareError?: string;
-	},
+			},
 ): void {
 	const lines: string[] = [];
 	lines.push(`# Subagent run ${input.id}`);
@@ -39,9 +37,7 @@ export function writeRunLog(
 	lines.push(`- **Ended:** ${new Date(input.endedAt).toISOString()}`);
 	lines.push(`- **Duration:** ${formatDuration(input.endedAt - input.startedAt)}`);
 	if (input.sessionFile) lines.push(`- **Session:** ${input.sessionFile}`);
-	if (input.shareUrl) lines.push(`- **Share:** ${input.shareUrl}`);
-	if (input.shareError) lines.push(`- **Share error:** ${input.shareError}`);
-	if (input.artifactsDir) lines.push(`- **Artifacts:** ${input.artifactsDir}`);
+			if (input.artifactsDir) lines.push(`- **Artifacts:** ${input.artifactsDir}`);
 	lines.push("");
 	lines.push("## Steps");
 	lines.push("| Step | Agent | Status | Duration |");

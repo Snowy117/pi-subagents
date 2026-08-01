@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { handleManagementAction } from "../../src/agents/agent-management.ts";
 import { serializeAgent } from "../../src/agents/agent-serializer.ts";
-import { parseChain, serializeChain } from "../../src/agents/chain-serializer.ts";
 import { discoverAgents, discoverAgentsAll, type AgentConfig } from "../../src/agents/agents.ts";
 import { buildPiArgs } from "../../src/runs/shared/pi-args.ts";
 import { THINKING_LEVELS } from "../../src/shared/model-info.ts";
@@ -55,53 +54,11 @@ afterEach(() => {
 	}
 });
 
-describe("chain discovery", () => {
-	it("prefers same-scope .chain.json over .chain.md for the same runtime name", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-chain-format-precedence-"));
-		tempDirs.push(dir);
-		const chainsDir = path.join(dir, ".pi", "chains");
-		fs.mkdirSync(chainsDir, { recursive: true });
-		fs.writeFileSync(path.join(chainsDir, "dynamic-review.chain.md"), `---
-name: dynamic-review
-description: Markdown fallback
----
-
-## scout
-
-Run the markdown chain
-`, "utf-8");
-		fs.writeFileSync(path.join(chainsDir, "dynamic-review.chain.json"), JSON.stringify({
-			name: "dynamic-review",
-			description: "JSON dynamic chain",
-			chain: [
-				{
-					agent: "scout",
-					task: "Return targets",
-					as: "targets",
-					outputSchema: { type: "object" },
-				},
-				{
-					expand: { from: { output: "targets", path: "/items" }, maxItems: 4 },
-					parallel: { agent: "reviewer", task: "Review {item.path}" },
-					collect: { as: "reviews" },
-				},
-			],
-		}), "utf-8");
-
-		const result = discoverAgentsAll(dir);
-		const chain = result.chains.find((candidate) => candidate.name === "dynamic-review");
-		assert.equal(chain?.description, "JSON dynamic chain");
-		assert.equal(chain?.filePath.endsWith(".chain.json"), true);
-		assert.equal("expand" in (chain?.steps[1] ?? {}), true);
-	});
-});
-
 describe("package-provided agents and chains", () => {
-	it("discovers package agents and chains from installed package manifests", () => withTempHome(() => {
+	it("discovers package agents from installed package manifests", () => withTempHome(() => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-package-discovery-"));
 		tempDirs.push(dir);
 		const workflowRoot = path.join(dir, ".pi", "npm", "node_modules", "my-pi-workflow");
-		const chainsRoot = path.join(dir, ".pi", "npm", "node_modules", "@scope", "chain-workflow");
 		writeJson(path.join(workflowRoot, "package.json"), {
 			name: "my-pi-workflow",
 			"pi-subagents": {
@@ -116,24 +73,6 @@ description: Review changes for this workflow.
 
 Review the workflow.
 `);
-		writeJson(path.join(chainsRoot, "package.json"), {
-			name: "@scope/chain-workflow",
-			pi: {
-				subagents: {
-					chains: ["./chains"],
-				},
-			},
-		});
-		writeAgent(path.join(chainsRoot, "chains", "review.chain.md"), `---
-name: review
-package: my-workflow
-description: Run workflow review.
----
-
-## my-workflow.reviewer
-
-Review the task.
-`);
 
 		const all = discoverAgentsAll(dir);
 		const packagedAgent = all.package.find((agent) => agent.name === "my-workflow.reviewer");
@@ -141,11 +80,6 @@ Review the task.
 		assert.equal(packagedAgent.source, "package");
 		assert.equal(packagedAgent.filePath, path.join(workflowRoot, "agents", "reviewer.md"));
 		assert.equal(discoverAgents(dir, "both").agents.find((agent) => agent.name === "my-workflow.reviewer")?.source, "package");
-
-		const packagedChain = all.chains.find((chain) => chain.name === "my-workflow.review");
-		assert.ok(packagedChain);
-		assert.equal(packagedChain.source, "package");
-		assert.equal(packagedChain.steps[0]?.agent, "my-workflow.reviewer");
 	}));
 
 	it("loads packages referenced from Pi settings", () => withTempHome(() => {
@@ -251,7 +185,6 @@ Agent prompt
 			name: "override-workflow",
 			"pi-subagents": {
 				agents: ["./agents"],
-				chains: ["./chains"],
 			},
 		});
 		writeAgent(path.join(packageRoot, "agents", "scout.md"), `---
@@ -260,15 +193,6 @@ description: Package scout
 ---
 
 Package scout.
-`);
-		writeAgent(path.join(packageRoot, "chains", "shared.chain.md"), `---
-name: shared
-description: Package chain
----
-
-## scout
-
-Package chain.
 `);
 		writeAgent(path.join(home, ".pi", "agent", "agents", "scout.md"), `---
 name: scout
@@ -284,29 +208,9 @@ description: Project scout
 
 Project scout.
 `);
-		writeAgent(path.join(home, ".pi", "agent", "chains", "shared.chain.md"), `---
-name: shared
-description: User chain
----
-
-## scout
-
-User chain.
-`);
-		writeAgent(path.join(dir, ".pi", "chains", "shared.chain.md"), `---
-name: shared
-description: Project chain
----
-
-## scout
-
-Project chain.
-`);
 
 		assert.equal(discoverAgents(dir, "user").agents.find((agent) => agent.name === "scout")?.source, "user");
 		assert.equal(discoverAgents(dir, "project").agents.find((agent) => agent.name === "scout")?.source, "project");
-		const chainByName = new Map(discoverAgentsAll(dir).chains.map((chain) => [chain.name, chain]));
-		assert.equal(chainByName.get("shared")?.source, "project");
 	}));
 
 	it("does not allow management updates to package agents", () => withTempHome(() => {
@@ -340,4 +244,3 @@ Review only.
 		assert.match(result.content[0]?.text ?? "", /read-only/);
 	}));
 });
-

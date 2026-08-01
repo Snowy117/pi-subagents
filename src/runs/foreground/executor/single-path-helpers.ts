@@ -3,7 +3,7 @@
 import { type AgentConfig } from "../../../agents/agents.ts";
 import { INTERCOM_BRIDGE_MARKER } from "../../../intercom/intercom-bridge.ts";
 import { type ModelInfo } from "../../../shared/model-info.ts";
-import { type AgentProgress, type ControlEvent, type Details, type ResolvedToolBudget, type SubagentState } from "../../../shared/types.ts";
+import { type AgentProgress, type ControlEvent, type Details, type SubagentState } from "../../../shared/types.ts";
 import { type RunSyncOptions } from "../../../shared/types/options-types.ts";
 import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -72,7 +72,6 @@ export interface SingleRunSyncOptionsLocals {
 	currentProvider: string | undefined;
 	effectiveSkills: string[] | undefined;
 	deadlineAt: number | undefined;
-	effectiveToolBudget: { toolBudget?: ResolvedToolBudget; error?: string };
 }
 
 
@@ -97,7 +96,6 @@ export function buildSingleRunSyncOptions(
 		currentProvider,
 		effectiveSkills,
 		deadlineAt,
-		effectiveToolBudget,
 	} = locals;
 	const orchestratorIntercomTarget = data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined;
 	const onDetachedExit = (result: import("../../../shared/types/result-types.ts").SingleResult): void => {
@@ -134,8 +132,6 @@ export function buildSingleRunSyncOptions(
 		preferredModelProvider: currentProvider,
 		modelScope: data.modelScope,
 		skills: effectiveSkills,
-		acceptance: params.acceptance,
-		acceptanceContext: { mode: "single" },
 		foregroundLiveChildren: deps.state.foregroundLiveChildren,
 		persistentChildren: deps.config.persistentChildren === undefined
 			? false
@@ -145,6 +141,5 @@ export function buildSingleRunSyncOptions(
 		timeoutMs: data.timeoutMs,
 		deadlineAt,
 		turnBudget: data.turnBudget,
-		toolBudget: effectiveToolBudget.toolBudget,
 	};
 }

@@ -10,9 +10,7 @@ import { buildModelCandidates, resolveSubagentModelOverride } from "../../shared
 import { resolveEffectiveThinking } from "../../../shared/model-info.ts";
 import { resolveExpectedWorktreeAgentCwd } from "../../shared/worktree.ts";
 import { buildWorkflowGraphSnapshot } from "../../shared/workflow-graph.ts";
-import { ChainOutputValidationError, validateChainOutputBindings } from "../../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime } from "../../shared/structured-output.ts";
-import { resolveEffectiveAcceptance } from "../../shared/acceptance.ts";
 import { resolveChildMaxSubagentDepth } from "../../../shared/types.ts";
 import { validateToolBudgetConfig } from "../../shared/tool-budget.ts";
 import type { AsyncRunnerStepBuildParams, AsyncRunnerStepBuildResult } from "./types.ts";
@@ -52,14 +50,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				? firstStep.parallel.task
 				: (firstStep as SequentialStep).task)
 		: undefined);
-	try {
-		if (params.validateOutputBindings !== false) {
-			validateChainOutputBindings(chain, { maxItems: params.dynamicFanoutMaxItems });
-		}
-	} catch (error) {
-		if (error instanceof ChainOutputValidationError) return { error: error.message };
-		throw error;
-	}
 	const workflowGraph = buildWorkflowGraphSnapshot({ runId: id, mode: resultMode, steps: graphChain });
 
 	for (const s of chain) {
@@ -95,7 +85,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
 		const instructionCwd = behaviorCwd ?? stepCwd;
 		const behavior = suppressProgressForReadOnlyTask(resolvedBehavior ?? resolveStepBehavior(a, buildStepOverrides(s), chainSkills), s.task, originalTask);
-		const skillNames = behavior.skills === false ? [] : behavior.skills;
+		const skillNames = behavior.skills === false ? [] : behavior.skills ?? [];
 		const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(skillNames, stepCwd, ctx.cwd);
 		if (missingSkills.includes("pi-subagents")) throw new UnavailableSubagentSkillError(UNAVAILABLE_SUBAGENT_SKILL_ERROR);
 
@@ -155,14 +145,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			outputMode: behavior.outputMode,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
-			effectiveAcceptance: resolveEffectiveAcceptance({
-				explicit: s.acceptance,
-				agentName: s.agent,
-				task: s.task,
-				mode: resultMode,
-				async: true,
-				dynamic: false,
-			}),
 			...(s.outputSchema ? { structuredOutputSchema: s.outputSchema } : {}),
 			...(s.outputSchema ? { structuredOutput: createStructuredOutputRuntime(s.outputSchema, path.join(asyncDir, "structured-output")) } : {}),
 			...(resolvedToolBudget.budget ? { toolBudget: resolvedToolBudget.budget } : {}),
@@ -232,14 +214,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 					label: s.label,
 					sessionFiles: dynamicFlatSteps.map((step) => step.sessionFile),
 					thinkingOverrides: dynamicFlatSteps.map((step) => step.thinkingOverride),
-					effectiveAcceptance: resolveEffectiveAcceptance({
-						explicit: s.acceptance,
-						agentName: s.parallel.agent,
-						task: s.parallel.task,
-						mode: resultMode,
-						async: true,
-						dynamicGroup: true,
-					}),
 				};
 			}
 			const staticStep = nextFlatStep();

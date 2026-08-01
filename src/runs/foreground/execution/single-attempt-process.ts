@@ -1,7 +1,6 @@
 import { trySignalChild } from "../../../shared/post-exit-stdio-guard.ts";
 import { INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT } from "../../../shared/types.ts";
 import type { SingleAttemptState } from "./single-attempt-state.ts";
-import { stripAcceptanceReport } from "../../shared/acceptance.ts";
 import { cleanupTempDir } from "../../shared/pi-args.ts";
 import { formatSavedOutputReference, resolveSingleOutput } from "../../shared/single-output.ts";
 import { getFinalOutput } from "../../../shared/utils.ts";
@@ -113,12 +112,12 @@ export function registerProcessHandlers(state: SingleAttemptState): void {
 				tokens: state.progress.tokens,
 				durationMs: state.progress.durationMs,
 			};
-			let fullOutput = stripAcceptanceReport(getFinalOutput(state.result.messages ?? []));
+			let fullOutput = getFinalOutput(state.result.messages ?? []);
 			fullOutput = fullOutput.trim() || state.result.error || state.result.finalOutput || "Detached child exited without final output.";
 			state.result.outputMode = state.options.outputMode ?? "inline";
 			if (state.options.outputPath && state.result.exitCode === 0) {
 				const resolvedOutput = resolveSingleOutput(state.options.outputPath, fullOutput, state.shared.outputSnapshot);
-				fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
+				fullOutput = resolvedOutput.fullOutput;
 				state.result.savedOutputPath = resolvedOutput.savedPath;
 				state.result.outputSaveError = resolvedOutput.saveError;
 				if (resolvedOutput.savedPath) {

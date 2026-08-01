@@ -9,7 +9,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectConfigDir } from "../../shared/utils.ts";
 import { KNOWN_FIELDS } from "../agent-serializer.ts";
-import { parseChain, parseJsonChain } from "../chain-serializer.ts";
 import { parseFrontmatter } from "../frontmatter.ts";
 import { buildRuntimeName, parsePackageName } from "../identity.ts";
 import { parseMemoryFrontmatter } from "../agent-memory.ts";
@@ -205,30 +204,8 @@ export function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig
 	return agents;
 }
 
-export function loadChainsFromDir(dir: string, source: AgentSource): { chains: ChainConfig[]; diagnostics: ChainDiscoveryDiagnostic[] } {
-	const chains = new Map<string, ChainConfig>();
-	const diagnostics: ChainDiscoveryDiagnostic[] = [];
-
-	for (const filePath of listFilesRecursive(dir, (fileName) => fileName.endsWith(".chain.md") || fileName.endsWith(".chain.json"))) {
-		let content: string;
-		try {
-			content = fs.readFileSync(filePath, "utf-8");
-		} catch {
-			continue;
-		}
-
-		try {
-			const chain = filePath.endsWith(".chain.json") ? parseJsonChain(content, source, filePath) : parseChain(content, source, filePath);
-			const existing = chains.get(chain.name);
-			if (existing && existing.filePath.endsWith(".chain.json") && filePath.endsWith(".chain.md")) continue;
-			chains.set(chain.name, chain);
-		} catch (error) {
-			diagnostics.push({ source, filePath, error: error instanceof Error ? error.message : String(error) });
-			continue;
-		}
-	}
-
-	return { chains: Array.from(chains.values()), diagnostics };
+export function loadChainsFromDir(_dir: string, _source: AgentSource): { chains: ChainConfig[]; diagnostics: ChainDiscoveryDiagnostic[] } {
+	return { chains: [], diagnostics: [] };
 }
 
 export function resolveNearestProjectAgentDirs(cwd: string): { readDirs: string[]; preferredDir: string | null } {
@@ -247,13 +224,6 @@ export function resolveNearestProjectAgentDirs(cwd: string): { readDirs: string[
 	};
 }
 
-export function resolveNearestProjectChainDirs(cwd: string): { readDirs: string[]; preferredDir: string | null } {
-	const projectRoot = findNearestProjectRoot(cwd);
-	if (!projectRoot) return { readDirs: [], preferredDir: null };
-
-	const preferredDir = path.join(getProjectConfigDir(projectRoot), "chains");
-	return {
-		readDirs: isDirectory(preferredDir) ? [preferredDir] : [],
-		preferredDir,
-	};
-}
+	export function resolveNearestProjectChainDirs(_cwd: string): { readDirs: string[]; preferredDir: string | null } {
+		return { readDirs: [], preferredDir: null };
+	}

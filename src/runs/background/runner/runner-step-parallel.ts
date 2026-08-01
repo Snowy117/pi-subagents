@@ -165,7 +165,6 @@ export async function runParallelGroupStep(state: RunnerState, ops: RunnerOps, g
 					turnBudget: state.config.turnBudget,
 					onAttemptStart: (attempt) => ops.updateStepModel(fi, attempt.model, attempt.thinking),
 					onChildEvent: (event) => ops.updateStepFromChildEvent(fi, event),
-					skipAcceptance: () => state.timedOut,
 				});
 				if (task.sessionFile) {
 					state.latestSessionFile = task.sessionFile;
@@ -201,7 +200,6 @@ export async function runParallelGroupStep(state: RunnerState, ops: RunnerOps, g
 				state.statusPayload.steps[fi].structuredOutput = singleResult.structuredOutput;
 				state.statusPayload.steps[fi].structuredOutputPath = singleResult.structuredOutputPath;
 				state.statusPayload.steps[fi].structuredOutputSchemaPath = singleResult.structuredOutputSchemaPath;
-				state.statusPayload.steps[fi].acceptance = singleResult.acceptance;
 				state.statusPayload.lastUpdate = taskEndTime;
 				ops.writeStatusPayload();
 				markLiveTranscriptTerminal(state.statusPayload.steps[fi].transcriptPath);

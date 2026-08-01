@@ -2,11 +2,10 @@ import * as fs from "node:fs";
 import { writeAtomicJson } from "../../../shared/atomic-json.ts";
 import { watchAsyncControlInbox } from "../control-channel.ts";
 import { SUBAGENT_LIFECYCLE_ARTIFACT_VERSION } from "../../../shared/types.ts";
-import { isDynamicRunnerGroup, isParallelGroup, type RunnerStep, type RunnerSubagentStep } from "../../shared/parallel-utils.ts";
+import { isParallelGroup, type RunnerStep, type RunnerSubagentStep } from "../../shared/parallel-utils.ts";
 import { appendJsonl } from "./event-logging.ts";
 import { createRunnerState, type StepOutcome } from "./runner-state.ts";
 import { createRunnerOps } from "./runner-ops.ts";
-import { runDynamicStep } from "./runner-step-dynamic.ts";
 import { runParallelGroupStep } from "./runner-step-parallel.ts";
 import { runSequentialStep } from "./runner-step-sequential.ts";
 import { finalizeRun } from "./runner-finalize.ts";
@@ -79,9 +78,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		const step = steps[stepIndex]!;
 
 		let outcome: StepOutcome;
-		if (isDynamicRunnerGroup(step)) {
-			outcome = await runDynamicStep(state, ops, step, stepIndex, flatIndex);
-		} else if (isParallelGroup(step)) {
+		if (isParallelGroup(step)) {
 			outcome = await runParallelGroupStep(state, ops, step, stepIndex, flatIndex);
 		} else {
 			outcome = await runSequentialStep(state, ops, step as RunnerSubagentStep, stepIndex, flatIndex);

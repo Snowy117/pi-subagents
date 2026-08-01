@@ -1,7 +1,6 @@
 /** parallel-tasks (split from subagent-executor.ts; internal-only). */
 
 import { INTERCOM_BRIDGE_MARKER } from "../../../intercom/intercom-bridge.ts";
-import { buildChainInstructions } from "../../../shared/settings.ts";
 import { type AgentProgress, type SingleResult } from "../../../shared/types.ts";
 import { mapConcurrent } from "../../../shared/utils.ts";
 import { injectSingleOutputInstruction, resolveSingleOutputPath } from "../../shared/single-output.ts";
@@ -23,17 +22,8 @@ export async function runForegroundParallelTasks(input: ForegroundParallelRunInp
 		const behavior = input.behaviors[index];
 		const effectiveSkills = behavior?.skills;
 		const taskCwd = resolveParallelTaskCwd(task, input.paramsCwd, input.worktreeSetup, index);
-		const readInstructions = behavior
-			? buildChainInstructions({ ...behavior, output: false, progress: false }, taskCwd, false)
-			: { prefix: "", suffix: "" };
-		const progressInstructions = behavior
-			? buildChainInstructions({ ...behavior, output: false, reads: false }, input.progressDir, index === input.firstProgressIndex)
-			: { prefix: "", suffix: "" };
 		const outputPath = resolveSingleOutputPath(behavior?.output, input.ctx.cwd, taskCwd, input.outputBaseDir);
-		const taskText = injectSingleOutputInstruction(
-			`${readInstructions.prefix}${input.taskTexts[index]!}${progressInstructions.suffix}`,
-			outputPath,
-		);
+		const taskText = injectSingleOutputInstruction(input.taskTexts[index]!, outputPath);
 		const interruptController = new AbortController();
 		if (input.foregroundControl) {
 			input.foregroundControl.currentAgent = task.agent;
@@ -82,8 +72,6 @@ export async function runForegroundParallelTasks(input: ForegroundParallelRunInp
 			preferredModelProvider: input.ctx.model?.provider,
 			modelScope: input.modelScope,
 			skills: effectiveSkills === false ? [] : effectiveSkills,
-			acceptance: task.acceptance,
-			acceptanceContext: { mode: "parallel" },
 			foregroundLiveChildren: input.state.foregroundLiveChildren,
 			timeoutMs: input.timeoutMs,
 			deadlineAt: input.deadlineAt,

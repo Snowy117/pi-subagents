@@ -10,7 +10,6 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../../../shared/long-running-guard.ts";
-import { stripAcceptanceReport } from "../../../shared/acceptance.ts";
 import { extractTextFromContent, extractToolArgsPreview } from "../../../../shared/utils.ts";
 import { appendJsonl } from "../event-logging.ts";
 import { appendRecentStepOutput, isTerminalAssistantStop } from "../usage-helpers.ts";
@@ -142,7 +141,7 @@ export function attachStepUpdateOps(ops: RunnerOps, state: RunnerState): void {
 				resetMutatingFailureState(state.mutatingFailureStates[flatIndex]!);
 			}
 		} else if (event.type === "message_end" && event.message?.role === "assistant") {
-			appendRecentStepOutput(step, stripAcceptanceReport(extractTextFromContent(event.message.content)).split("\n").slice(-10));
+			appendRecentStepOutput(step, extractTextFromContent(event.message.content).split("\n").slice(-10));
 			step.turnCount = (step.turnCount ?? 0) + 1;
 			const usage = event.message.usage;
 			if (usage) {

@@ -10,7 +10,6 @@ import type { TurnBudgetState, ToolBudgetState, TokenUsage, CostSummary } from "
 import type { ActivityState } from "./control-types.ts";
 import type { SubagentRunMode, SubagentResultStatus, WorkflowGraphSnapshot, ChainOutputMap, ModelAttempt, OutputMode } from "./result-types.ts";
 import type { ArtifactPaths } from "./options-types.ts";
-import type { AcceptanceLedger } from "./acceptance-types.ts";
 import type { SubagentLifecycleArtifactVersion } from "./constants.ts";
 import type { AsyncParallelGroupStatus, NestedRunSummary, NestedRouteInfo } from "./nested-types.ts";
 
@@ -112,7 +111,7 @@ export interface AsyncStatus {
 		structuredOutput?: unknown;
 		structuredOutputPath?: string;
 		structuredOutputSchemaPath?: string;
-		acceptance?: AcceptanceLedger;
+
 	}>;
 	sessionDir?: string;
 	outputFile?: string;

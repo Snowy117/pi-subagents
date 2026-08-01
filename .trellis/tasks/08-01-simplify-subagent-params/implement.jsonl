@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/typescript/index.md", "reason": "TypeScript development conventions: import style, TypeBox schemas, testing, quality checklist"}
+{"file": ".trellis/spec/typescript/quality-guidelines.md", "reason": "Required patterns (node: prefix, .ts extension, import type), forbidden patterns, testing requirements"}
+{"file": ".trellis/spec/typescript/directory-structure.md", "reason": "Domain layout under src/, runs/ engine split, naming conventions"}
+{"file": ".trellis/spec/typescript/module-and-export-guidelines.md", "reason": "ESM, named exports, .ts extension on relative imports"}
+{"file": ".trellis/spec/typescript/error-and-io-guidelines.md", "reason": "Atomic JSON writes, injectable dependencies, best-effort catch"}
+{"file": ".trellis/spec/typescript/schema-and-type-safety.md", "reason": "TypeBox runtime schemas, shared/types.ts, union types"}
+{"file": ".trellis/spec/typescript/cross-extension-contracts.md", "reason": "Co-existence with pi-intercom, tool-name collision, reply-path"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data flow: event log boundary, payload contracts, type guards"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Pattern identification, duplication reduction, pre-modification search rule"}

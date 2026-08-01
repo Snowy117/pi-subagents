@@ -7,7 +7,6 @@ import {
 	DEFAULT_GLOBAL_CONCURRENCY_LIMIT,
 	Semaphore,
 	flattenSteps,
-	isDynamicRunnerGroup,
 	isParallelGroup,
 	type RunnerSubagentStep,
 } from "../../shared/parallel-utils.ts";
@@ -145,20 +144,6 @@ function buildInitialStatus(config: SubagentRunConfig, id: string, artifactsDir:
 				});
 				flatStepCount++;
 			}
-		} else if (isDynamicRunnerGroup(step)) {
-			parallelGroups.push({ start: flatStepCount, count: 1, stepIndex });
-			initialStatusSteps.push({
-				agent: `expand:${step.parallel.agent}`,
-				phase: step.phase ?? step.parallel.phase,
-				label: step.label ?? step.parallel.label ?? `Dynamic fanout (${step.collect.as})`,
-				outputName: step.collect.as,
-				structured: Boolean(step.collect.outputSchema),
-				status: "pending",
-				...(step.parallel.toolBudget ? { toolBudget: initialToolBudgetState(step.parallel.toolBudget) } : {}),
-				recentTools: [],
-				recentOutput: [],
-			});
-			flatStepCount++;
 		} else {
 			const stepFlatIndex = flatStepCount;
 			const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: step.agent, flatIndex: stepFlatIndex, flatStepCount: initialFlatStepCount });

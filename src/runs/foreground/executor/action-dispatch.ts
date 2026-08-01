@@ -14,7 +14,6 @@ import { inspectSubagentStatus } from "../../background/run-status.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as path from "node:path";
-import { appendStepToAsyncChain } from "./chain-append.ts";
 import { getForegroundControl, foregroundStatusResult, nestedResolutionScopeForExecutor, trustedSessionRootsForStatus } from "./foreground-state.ts";
 import { interruptAsyncRun, steerAsyncRun, steerForegroundRun } from "./interrupt-steer.ts";
 import { interruptNestedRun, steerNestedRun } from "./nested-runs.ts";
@@ -133,9 +132,6 @@ export async function dispatchAction(input: {
 		if (resolved?.kind === "foreground") return steerForegroundRun({ state: deps.state, runId: resolved.id, message, index: params.index });
 		if (resolved?.kind !== "async") return { content: [{ type: "text", text: `No async run found for '${targetRunId}'.` }], isError: true, details: { mode: "management", results: [] } };
 		return steerAsyncRun({ state: deps.state, runId: resolved.id, message, index: params.index, kill: deps.kill, location: resolved.location });
-	}
-	if (action === "append-step") {
-		return appendStepToAsyncChain({ params: params, requestCwd, ctx, deps });
 	}
 	if (action === "schedule" || action === "schedule-list" || action === "schedule-status" || action === "schedule-cancel") {
 		if (!deps.handleScheduledRunAction) {

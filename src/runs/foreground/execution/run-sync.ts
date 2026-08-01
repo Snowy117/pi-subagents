@@ -1,6 +1,6 @@
 /** runSync — top-level synchronous subagent execution wrapper. Iterates model
- * candidates (delegating to runSingleAttempt), writes artifacts/metadata, and
- * evaluates acceptance. Moved out of execution.ts (foreground split). */
+ * candidates (delegating to runSingleAttempt) and writes artifacts/metadata.
+ * Moved out of execution.ts (foreground split). */
 
 import { existsSync } from "node:fs";
 import type { AgentConfig } from "../../../agents/agents.ts";
@@ -8,14 +8,13 @@ import { ensureArtifactsDir, getArtifactPaths, writeArtifact, writeMetadata } fr
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../../shared/child-transcript.ts";
 import { markLiveTranscriptTerminal, resolveLiveTranscriptPath } from "../../../shared/live-transcript.ts";
 import { type ArtifactPaths, type ModelAttempt, type RunSyncOptions, type SingleResult, DEFAULT_MAX_OUTPUT, truncateOutput } from "../../../shared/types.ts";
-import { detectSubagentError, findLatestSessionFile, getFinalOutput } from "../../../shared/utils.ts";
+import { detectSubagentError, getFinalOutput } from "../../../shared/utils.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../../../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../../../agents/agent-memory.ts";
 import { captureSingleOutputSnapshot, injectOutputPathSystemPrompt, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../../shared/single-output.ts";
 import { buildModelCandidates, formatModelAttemptNote, isRetryableModelFailure } from "../../shared/model-fallback.ts";
-import { acceptanceFailureMessage, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance } from "../../shared/acceptance.ts";
 import { runSingleAttempt } from "./run-single-attempt.ts";
-import { acceptanceOutputByResult, artifactOutputByResult, buildSkippedAcceptanceLedger, emptyUsage, formatTimeoutMessage, stripAcceptanceReportsFromMessages, sumUsage } from "./attempt-helpers.ts";
+import { artifactOutputByResult, emptyUsage, formatTimeoutMessage, sumUsage } from "./attempt-helpers.ts";
 
 /**
  * Run a subagent synchronously (blocking until complete)
@@ -51,19 +50,7 @@ export async function runSync(
 		};
 	}
 
-	const shareEnabled = options.share === true;
-	const effectiveAcceptance = resolveEffectiveAcceptance({
-		explicit: options.acceptance,
-		agentName,
-		task,
-		mode: options.acceptanceContext?.mode ?? "single",
-		async: options.acceptanceContext?.async,
-		dynamic: options.acceptanceContext?.dynamic,
-		dynamicGroup: options.acceptanceContext?.dynamicGroup,
-	});
-	const acceptancePrompt = formatAcceptancePrompt(effectiveAcceptance);
-	const taskWithAcceptance = acceptancePrompt ? `${task}\n${acceptancePrompt}` : task;
-	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
+	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir);
 	const skillNames = options.skills ?? agent.skills ?? [];
 	const skillCwd = options.cwd ?? runtimeCwd;
 	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(skillNames, skillCwd, runtimeCwd);
@@ -109,7 +96,7 @@ export async function runSync(
 		artifactPathsResult = getArtifactPaths(options.artifactsDir, options.runId, agentName, options.index);
 		ensureArtifactsDir(options.artifactsDir);
 		if (options.artifactConfig?.includeInput !== false) {
-				writeArtifact(artifactPathsResult.inputPath, `# Task for ${agentName}\n\n${taskWithAcceptance}`);
+				writeArtifact(artifactPathsResult.inputPath, `# Task for ${agentName}\n\n${task}`);
 		}
 		if (options.artifactConfig?.includeJsonl !== false) {
 			jsonlPath = artifactPathsResult.jsonlPath;
@@ -132,7 +119,7 @@ export async function runSync(
 			childIndex: options.index,
 			cwd: options.cwd ?? runtimeCwd,
 		});
-		transcriptWriter.writeInitialUserMessage(taskWithAcceptance);
+		transcriptWriter.writeInitialUserMessage(task);
 	}
 
 	let lastResult: SingleResult | undefined;
@@ -140,7 +127,7 @@ export async function runSync(
 	for (let i = 0; i < modelsToTry.length; i++) {
 		const candidate = modelsToTry[i];
 		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
-		const result = await runSingleAttempt(runtimeCwd, agent, taskWithAcceptance, candidate, options, {
+		const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, options, {
 			sessionEnabled,
 			systemPrompt,
 			resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
@@ -246,31 +233,6 @@ export async function runSync(
 
 	if (options.sessionFile && (existsSync(options.sessionFile) || result.messages?.length)) {
 		result.sessionFile = options.sessionFile;
-	} else if (shareEnabled && options.sessionDir) {
-		const sessionFile = findLatestSessionFile(options.sessionDir);
-		if (sessionFile) result.sessionFile = sessionFile;
-	}
-
-	result.acceptance = result.detached
-		? buildSkippedAcceptanceLedger(effectiveAcceptance, { id: "detached", message: "Acceptance was not evaluated because the subagent detached for intercom coordination before task completion." })
-		: result.timedOut
-			? buildSkippedAcceptanceLedger(effectiveAcceptance, { id: "timeout", message: "Acceptance was not evaluated because the subagent timed out." })
-			: result.turnBudgetExceeded
-			? buildSkippedAcceptanceLedger(effectiveAcceptance, { id: "turn-budget", message: "Acceptance was not evaluated because the subagent exceeded its turn budget." })
-			: await evaluateAcceptance({
-			acceptance: effectiveAcceptance,
-			output: acceptanceOutputByResult.get(result) ?? result.finalOutput ?? "",
-			cwd: options.cwd ?? runtimeCwd,
-		});
-	const acceptanceFailure = acceptanceFailureMessage(result.acceptance);
-	stripAcceptanceReportsFromMessages(result.messages);
-	if (acceptanceFailure && result.acceptance.explicit && result.exitCode === 0 && !result.detached && !result.interrupted && !result.timedOut) {
-		result.exitCode = 1;
-		result.error = result.error ? `${result.error}\n${acceptanceFailure}` : acceptanceFailure;
-		if (result.progress) {
-			result.progress.status = "failed";
-			result.progress.error = result.error;
-		}
 	}
 
 	if (!result.detached && !result.residentChild) markLiveTranscriptTerminal(transcriptWriter?.path);

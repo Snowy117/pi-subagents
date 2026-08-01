@@ -7,7 +7,6 @@ import { buildAgentMemoryInjection } from "../../../agents/agent-memory.ts";
 import { resolveChildCwd } from "../../../shared/utils.ts";
 import { buildModelCandidates, resolveSubagentModelOverride } from "../../shared/model-fallback.ts";
 import { resolveEffectiveThinking } from "../../../shared/model-info.ts";
-import { resolveEffectiveAcceptance } from "../../shared/acceptance.ts";
 import { ASYNC_DIR, RESULTS_DIR, SUBAGENT_ASYNC_STARTED_EVENT, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, TEMP_ROOT_DIR, resolveChildMaxSubagentDepth } from "../../../shared/types.ts";
 import { nestedResultsPath, resolveInheritedNestedRouteFromEnv, resolveNestedParentAddressFromEnv, writeNestedEvent } from "../../shared/nested-events.ts";
 import { initialTurnBudgetState } from "../../shared/turn-budget.ts";
@@ -125,13 +124,6 @@ export function executeAsyncSingle(
 						outputMode,
 						sessionFile,
 						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
-						effectiveAcceptance: resolveEffectiveAcceptance({
-							explicit: params.acceptance,
-							agentName: agent,
-							task,
-							mode: "single",
-							async: true,
-						}),
 						...(resolvedToolBudget.budget ? { toolBudget: resolvedToolBudget.budget } : {}),
 					},
 				],

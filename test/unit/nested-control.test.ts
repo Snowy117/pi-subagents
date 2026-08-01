@@ -354,7 +354,7 @@ describe("nested control routing", () => {
 			};
 
 			const result = await createExecutor(createState(), [{ name: "worker", description: "Worker", prompt: "Do work" }])
-				.execute("run", { agent: "worker", task: "go" }, new AbortController().signal, undefined, throwingCtx);
+				.execute("run", { tasks: [{ agent: "worker", task: "go" }] }, new AbortController().signal, undefined, throwingCtx);
 
 			assert.equal(result.isError, true);
 			assert.match(text(result), /model registry exploded/);

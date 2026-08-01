@@ -17,7 +17,6 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { discoverAgents } from "../agents/agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
-import { cleanupOldChainDirs } from "../shared/settings.ts";
 import { renderWidget } from "../tui/render.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createRpcChildRegistry } from "../runs/persistent/rpc-child-registry.ts";
@@ -73,7 +72,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	ensureAccessibleDir(RESULTS_DIR);
 	ensureAccessibleDir(ASYNC_DIR);
-	cleanupOldChainDirs();
 
 	const config = loadConfig();
 	// Product default: persistent RPC children are enabled unless the user

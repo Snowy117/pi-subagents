@@ -87,7 +87,7 @@ export interface StepResult {
 	structuredOutput?: unknown;
 	structuredOutputPath?: string;
 	structuredOutputSchemaPath?: string;
-	acceptance?: import("../../../shared/types.ts").AcceptanceLedger;
+
 }
 
 export interface ChildEventContext {
@@ -170,7 +170,6 @@ export interface SingleStepContext {
 	nestedRoute?: NestedRouteInfo;
 	onAttemptStart?: (attempt: { model?: string; thinking?: string }) => void;
 	onChildEvent?: (event: ChildEvent) => void;
-	skipAcceptance?: () => boolean;
 	/** Launch steps as persistent Pi RPC processes (Option B). */
 	persistentChildren?: boolean;
 	/** Parent-side registry for resident RPC children. */
@@ -190,9 +189,6 @@ export type RunnerStatusPayload = Omit<AsyncStatus, "steps" | "parallelGroups" |
 	steps: RunnerStatusStep[];
 	lastUpdate: number;
 	artifactsDir?: string;
-	shareUrl?: string;
-	gistUrl?: string;
-	shareError?: string;
 	error?: string;
 };
 

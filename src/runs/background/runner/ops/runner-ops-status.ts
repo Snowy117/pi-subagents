@@ -1,6 +1,5 @@
 import { writeAtomicJson } from "../../../../shared/atomic-json.ts";
 import { nestedSummaryFromAsyncStatus, writeNestedEvent } from "../../../shared/nested-events.ts";
-import type { AcceptanceLedger } from "../../../../shared/types.ts";
 import type { RunnerStatusStep } from "../types.ts";
 import type { RunnerOps } from "../runner-ops.ts";
 import type { RunnerState } from "../runner-state.ts";
@@ -42,7 +41,6 @@ export function attachStatusOps(ops: RunnerOps, state: RunnerState): void {
 				if (step) {
 					node.status = normalize(step.status);
 					node.error = step.error;
-					node.acceptanceStatus = step.acceptance?.status;
 				}
 				if (state.statusPayload.currentStep === node.flatIndex) graph.currentNodeId = node.id;
 			}
@@ -63,12 +61,11 @@ export function attachStatusOps(ops: RunnerOps, state: RunnerState): void {
 		writeAtomicJson(state.statusPath, state.statusPayload);
 		ops.emitNestedSelfEvent(state.statusPayload.state === "running" || state.statusPayload.state === "queued" ? "subagent.nested.updated" : "subagent.nested.completed");
 	};
-	ops.markDynamicGraphGroup = (stepIndex: number, status: "completed" | "failed" | "running", error?: string, acceptance?: AcceptanceLedger): void => {
+	ops.markDynamicGraphGroup = (stepIndex: number, status: "completed" | "failed" | "running", error?: string): void => {
 		const groupNode = state.statusPayload.workflowGraph?.nodes.find((node) => node.id === `step-${stepIndex}`);
 		if (!groupNode) return;
 		groupNode.status = status;
 		groupNode.error = error;
-		groupNode.acceptanceStatus = acceptance?.status ?? groupNode.acceptanceStatus;
 	};
 	ops.syncTopLevelCurrentTool = (): void => {
 		const activeStep = state.statusPayload.steps

@@ -46,9 +46,6 @@ interface SubagentResult {
 	durationMs?: number;
 	cwd?: string;
 	sessionFile?: string;
-	shareUrl?: string;
-	gistUrl?: string;
-	shareError?: string;
 	results?: ChainStepResult[];
 	taskIndex?: number;
 	totalTasks?: number;

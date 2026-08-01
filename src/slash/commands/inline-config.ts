@@ -1,17 +1,12 @@
+import { discoverAgents } from "../../agents/agents.ts";
+import type { SubagentState } from "../../shared/types.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
 export interface InlineConfig {
-	output?: string | false;
-	outputMode?: "inline" | "file-only";
-	reads?: string[] | false;
 	model?: string;
 	skill?: string[] | false;
 	progress?: boolean;
-	as?: string;
-	label?: string;
-	phase?: string;
-	cwd?: string;
 	count?: number;
-	outputSchema?: string;
-	acceptance?: string;
 }
 
 export const parseInlineConfig = (raw: string): InlineConfig => {
@@ -27,19 +22,10 @@ export const parseInlineConfig = (raw: string): InlineConfig => {
 		const key = trimmed.slice(0, eq).trim();
 		const val = trimmed.slice(eq + 1).trim();
 		switch (key) {
-			case "output": config.output = val === "false" ? false : val; break;
-			case "outputMode": if (val === "inline" || val === "file-only") config.outputMode = val; break;
-			case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "model": config.model = val || undefined; break;
 			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "progress": config.progress = val !== "false"; break;
-			case "as": config.as = val || undefined; break;
-			case "label": config.label = val || undefined; break;
-			case "phase": config.phase = val || undefined; break;
-			case "cwd": config.cwd = val || undefined; break;
 			case "count": { const n = Number(val); if (Number.isInteger(n) && n > 0) config.count = n; break; }
-			case "outputSchema": config.outputSchema = val || undefined; break;
-			case "acceptance": config.acceptance = val || undefined; break;
 		}
 	}
 	return config;
@@ -72,4 +58,84 @@ export const extractExecutionFlags = (rawArgs: string): { args: string; bg: bool
 	}
 
 	return { args, bg, fork };
+};
+
+export interface ParsedStep { kind: "step"; name: string; config: InlineConfig; task?: string }
+
+export function parseSingleTaskToken(token: string): ParsedStep {
+	let agentPart: string;
+	let task: string | undefined;
+	const qMatch = token.match(/^(\S+(?:\[[^\]]*\])?)\s+(?:"([^"]*)"|'([^']*)')$/);
+	if (qMatch) {
+		agentPart = qMatch[1]!;
+		task = (qMatch[2] ?? qMatch[3]) || undefined;
+	} else {
+		const dashIdx = token.indexOf(" -- ");
+		if (dashIdx !== -1) {
+			agentPart = token.slice(0, dashIdx).trim();
+			task = token.slice(dashIdx + 4).trim() || undefined;
+		} else {
+			agentPart = token;
+		}
+	}
+	return { kind: "step", ...parseAgentToken(agentPart), task };
+}
+
+export const parseAgentArgs = (
+	state: SubagentState,
+	args: string,
+	command: string,
+	ctx: ExtensionContext,
+): { steps: ParsedStep[]; task: string } | null => {
+	const input = args.trim();
+	const usage = `Usage: /${command} agent1 "task1" -> agent2 "task2"`;
+	let steps: ParsedStep[];
+	let sharedTask: string;
+	let perStep = false;
+
+	if (input.includes(" -> ")) {
+		perStep = true;
+		const segments = input.split(" -> ");
+		steps = [];
+		for (const seg of segments) {
+			const trimmed = seg.trim();
+			if (!trimmed) continue;
+			steps.push(parseSingleTaskToken(trimmed));
+		}
+		sharedTask = steps.find((s) => s.task)?.task ?? "";
+	} else {
+		const delimiterIndex = input.indexOf(" -- ");
+		if (delimiterIndex === -1) {
+			ctx.ui.notify(usage, "error");
+			return null;
+		}
+		const agentsPart = input.slice(0, delimiterIndex).trim();
+		sharedTask = input.slice(delimiterIndex + 4).trim();
+		if (!agentsPart || !sharedTask) {
+			ctx.ui.notify(usage, "error");
+			return null;
+		}
+		steps = agentsPart.split(/\s+/).filter(Boolean).map((t) => parseSingleTaskToken(t));
+	}
+
+	if (steps.length === 0) {
+		ctx.ui.notify(usage, "error");
+		return null;
+	}
+	if (!state.baseCwd) {
+		ctx.ui.notify("Subagent session cwd is not initialized yet", "error");
+		return null;
+	}
+	const agents = discoverAgents(state.baseCwd, "both").agents;
+	for (const step of steps) {
+		if (!agents.find((a) => a.name === step.name)) {
+			ctx.ui.notify(`Unknown agent: ${step.name}`, "error");
+			return null;
+		}
+	}
+	if (command === "parallel" && !steps.some((s) => s.task) && !sharedTask) {
+		ctx.ui.notify("At least one step must have a task", "error");
+		return null;
+	}
+	return { steps, task: sharedTask };
 };
