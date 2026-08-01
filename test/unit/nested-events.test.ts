@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, before, describe, it } from "node:test";
 import type { AsyncJobState, SubagentState } from "../../src/shared/types.ts";
 import {
 	buildNestedRouteIndex,
 	createNestedRoute,
 	hasLiveNestedDescendants,
+	NESTED_EVENTS_DIR,
 	parseNestedEventRecords,
 	projectNestedEvents,
 	resolveNestedParentAddressFromEnv,
@@ -72,6 +73,16 @@ function child(id: string, state: "queued" | "running" | "complete" | "failed" |
 }
 
 describe("nested route index", () => {
+	before(() => {
+		// Clean up any stale routes left by previous test runs that could shadow
+		// the routes created in this suite (rootRunId prefix collision).
+		for (const entry of fs.readdirSync(NESTED_EVENTS_DIR)) {
+			if (entry.startsWith("dup-root-") || entry.startsWith("index-root-")) {
+				fs.rmSync(path.join(NESTED_EVENTS_DIR, entry), { recursive: true, force: true });
+			}
+		}
+	});
+
 	it("indexes routes by root run id in a single directory scan", () => {
 		const routeA = trackRoute("index-root-a");
 		const routeB = trackRoute("index-root-b");
