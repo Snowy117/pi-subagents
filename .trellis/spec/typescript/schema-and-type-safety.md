@@ -21,6 +21,72 @@ gives no protection there.
 
 ---
 
+## Subagent Dispatch Schema (16 params)
+
+After the `08-01-simplify-subagent-params` cleanup, the subagent dispatch API
+was reduced from 30+ params to 16. All configuration-driven defaults
+(`toolBudget`, `turnBudget`, `timeout`, `cwd`, `sessionDir`, `output`,
+`outputMode`, `reads`, `control`) are read from agent config only — dispatch
+no longer overrides them.
+
+```typescript
+const SubagentParamsSchema = Type.Object({
+  // Management/control
+  action: Type.Optional(Type.String()),
+  id: Type.Optional(Type.String()),
+  index: Type.Optional(Type.Integer({ minimum: 0 })),
+  view: Type.Optional(Type.String({ enum: ["fleet", "transcript"] })),
+  lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+  message: Type.Optional(Type.String()),
+  config: Type.Optional(Type.Unsafe({ anyOf: [{ type: "object" }, { type: "string" }] })),
+
+  // Scheduling
+  schedule: Type.Optional(Type.String()),
+  scheduleName: Type.Optional(Type.String()),
+
+  // Execution
+  tasks: Type.Optional(Type.Array(TaskItem)),
+  concurrency: Type.Optional(Type.Integer({ minimum: 1 })),
+  worktree: Type.Optional(Type.Boolean()),
+  context: Type.Optional(Type.String({ enum: ["fresh", "fork"] })),
+  async: Type.Optional(Type.Boolean()),
+  artifacts: Type.Optional(Type.Boolean()),
+  includeProgress: Type.Optional(Type.Boolean()),
+});
+```
+
+`TaskItem` has 6 fields:
+
+```typescript
+const TaskItem = Type.Object({
+  agent: Type.String(),
+  task: Type.String(),
+  count: Type.Optional(Type.Integer({ minimum: 1 })),
+  progress: Type.Optional(Type.Boolean()),
+  model: Type.Optional(Type.String()),
+  skill: Type.Optional(SkillOverride),
+});
+```
+
+### One mode to rule them all
+
+All execution is unified via `tasks: [{agent, task}]`. A single task is just
+parallel with n=1. The old `agent`/`task` top-level params are removed.
+
+### Removed features (from user-facing dispatch)
+
+- Chain support (CHAIN mode, chainDir, chainName, dynamic fanout)
+- Clarify TUI
+- Session sharing (GitHub Gist)
+- Acceptance gates
+- toolBudget / turnBudget / timeoutMs / maxRuntimeMs overrides
+- cwd override
+- sessionDir override
+- control override
+- agentScope override
+- output / outputMode / reads overrides
+- runId / dir aliases (only `id`)
+
 ## TypeBox Schemas (for tool params & RPC)
 
 `src/extension/schemas.ts` defines the public tool-parameter schemas using
