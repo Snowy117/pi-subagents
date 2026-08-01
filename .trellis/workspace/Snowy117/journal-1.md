@@ -314,3 +314,36 @@ Fourth trellis-check (run f70f4a45) verified target-switch fix + timeout test co
 ### Status
 
 Implementation + verification complete. Next: commit (Phase 3.4), then /trellis:finish-work.
+
+
+## Session 5: Simplify subagent params: remove chain, acceptance, clarify, share, budget/timeout/cwd overrides
+
+**Date**: 2026-08-01
+**Task**: Simplify subagent params: remove chain, acceptance, clarify, share, budget/timeout/cwd overrides
+**Branch**: `main`
+
+### Summary
+
+Massive parameter cleanup: removed chain, acceptance, clarify, share, toolBudget/turnBudget/timeoutMs/cwd/sessionDir/control/output/agentScope overrides. Unified dispatch via tasks:[{agent,task}]. Retained 16 dispatch params and 6 TaskItem fields. 127 files changed, 11385 lines removed, 460 inserted.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0be079a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
