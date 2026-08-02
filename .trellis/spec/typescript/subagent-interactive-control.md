@@ -271,14 +271,15 @@ const response = consumeControlActionResponses(child.actionControlDir)
 
 ---
 
-## Persistent RPC execution children (Option B)
+## Persistent RPC execution children (unconditional)
 
 ### Scope / Trigger
 
-Every foreground and async execution child can launch as a persistent Pi RPC
-process (`--mode rpc`, stdin piped) instead of the legacy one-shot
-`--mode json -p`. Logical completion is `agent_settled`; the process stays
-resident for direct conversation until evicted. Modules:
+Every foreground and async execution child is a persistent Pi RPC process
+(`--mode rpc`, stdin piped). Logical completion is `agent_settled`; the
+process stays resident for direct conversation until evicted. JSON one-shot
+(`--mode json -p`) was removed 2026-08-02; `PI_SUBAGENT_E2E_JSON_CHILD`
+retains a test-only escape hatch. Modules:
 `src/runs/persistent/{rpc-protocol,rpc-child-registry}.ts`,
 `src/runs/foreground/execution/*`, `src/runs/background/runner/*`,
 `src/tui/steer-view/{host-editor-mode,reopen-bridge}.ts`,
@@ -288,14 +289,14 @@ resident for direct conversation until evicted. Modules:
 
 ```ts
 // pi-args
-buildPiArgs({ mode?: "json" | "rpc" });           // rpc: --mode rpc, no -p, no positional task, no @file
+buildPiArgs({ mode: "rpc" });                       // always --mode rpc, no -p, no positional task, no @file
 // rpc-protocol
 attachRpcProtocol(child): { write: RpcWrite; reader: RpcLineReader };
 // rpc-child-registry
 createRpcChildRegistry(): RpcChildRegistry;       // get/has/register/unregister/evictIdle/evictOverflow/closeAll
 createRpcChildCloser(child, deps): (kind: "graceful" | "force") => Promise<void>;
-// config
-resolvePersistentChildConfig(config): ResolvedPersistentChildConfig;  // {enabled, idleEvictionMs, maxResidentChildren}
+// eviction defaults (hardcoded; config switch removed)
+IDLE_EVICTION_MS = 15 * 60 * 1000; MAX_RESIDENT_CHILDREN = 4;
 // host-editor mode
 createHostEditorConversation({ getResidentChild }): HostEditorConversationHandle;
 // reopen bridge
@@ -342,7 +343,7 @@ createReopenBridge({ registry, getChildLaunchArgs, cwd }): ReopenBridge;
 | `agent_settled` never arrives | Timeout/budget/interrupt paths terminate the process (failed run) |
 | Reopen while resident entry exists | Returns existing entry; never spawns a second writer |
 | `--no-session` child | `residentChild` continuity unavailable; viewer falls back to read-only/steer |
-| `persistentChildren: false` | Legacy one-shot json launch unchanged; tests exercise both paths |
+| `persistentChildren` config | Deprecated no-op (2026-08-02): all children are RPC regardless; `PI_SUBAGENT_E2E_JSON_CHILD=1` keeps the test JSON path |
 
 ### Tests Required
 
@@ -450,6 +451,13 @@ async-bridge-channel,bridge-relay-tail,child-commands}.ts`,
   only after the runner pid is confirmed dead (`process.kill(pid,0)`→ESRCH,
   bounded ≤5s); region-of-authority keeps single-writer per session across
   processes (runner closes children → parent reopen).
+- **Foreground live children carry sessionFile**: `ForegroundLiveChild`
+  records `sessionFile` at registration, and `fromForeground` forwards it
+  into `SteerViewTarget`. `resolveForeground` therefore always has a reopen
+  path when `getForegroundResident` returns undefined (process exited/evicted)
+  — without this, a foreground child whose process had exited left the target
+  with no sessionFile and the viewer degraded to read-only
+  ("always read-only" bug, fixed 2026-08-02).
 - **Channel swap**: when the active channel's `closed` fires, host-editor
   re-resolves; success → the accumulated assembler conversation survives (same
   instance; new channel's stdout feeds it; key-route re-subscribes by channel
