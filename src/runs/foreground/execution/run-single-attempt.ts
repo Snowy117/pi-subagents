@@ -33,7 +33,7 @@ import { appendTurnBudgetSystemPrompt, initialTurnBudgetState } from "../../shar
 import { initialToolBudgetState } from "../../shared/tool-budget.ts";
 import { getPiSpawnCommand } from "../../shared/pi-spawn.ts";
 import { attachRpcProtocol } from "../../persistent/rpc-protocol.ts";
-import { createRpcChildCloser } from "../../persistent/rpc-child-registry.ts";
+import { createRpcChildCloser, type PersistentRpcChild } from "../../persistent/rpc-child-registry.ts";
 import {
 	foregroundLiveChildKey,
 	registerForegroundLiveChild,
@@ -218,6 +218,7 @@ export async function runSingleAttempt(
 
 	const registry = options.persistentChildRegistry;
 	const childKey = `${options.runId}/${index}`;
+	let rpcChild: PersistentRpcChild | undefined;
 
 	let exitCode: number;
 	try {
@@ -247,33 +248,29 @@ export async function runSingleAttempt(
 			registerProcessHandlers(state);
 			registerSignalHandlers(state);
 
-			if (registry) {
-				// Persistent RPC process: own the JSONL write side, deliver the task
-				// over stdin, and register the resident child for later viewer turns.
-				// The process stays alive after agent_settled; eviction is the
-				// registry's job.
-				const rpcWrite = attachRpcProtocol(proc).write;
-				state.rpcWrite = rpcWrite;
-				const closed = new Promise<void>((closedResolve) => {
-					proc.once("close", () => closedResolve());
-					proc.once("error", () => closedResolve());
-				});
-				const resident = {
-					key: childKey,
-					sessionFile: options.sessionFile,
-					proc,
-					write: rpcWrite,
-					settled: false,
-					lastActivityAt: Date.now(),
-					pendingDialogs: new Map<string, { resolve: (value: unknown) => void }>(),
-					pendingRequestIds: new Set<string>(),
-					closed,
-					close: async () => {},
-				};
-				resident.close = createRpcChildCloser(resident, {});
-				registry.register(resident);
-				state.rpcWrite.write({ type: "prompt", message: task });
-			}
+			const rpcWrite = attachRpcProtocol(proc).write;
+			state.rpcWrite = rpcWrite;
+			const closed = new Promise<void>((closedResolve) => {
+				proc.once("close", () => closedResolve());
+				proc.once("error", () => closedResolve());
+			});
+			const child: PersistentRpcChild = {
+				key: childKey,
+				sessionFile: options.sessionFile,
+				proc,
+				write: rpcWrite,
+				settled: false,
+				lastActivityAt: Date.now(),
+				pendingDialogs: new Map<string, { resolve: (value: unknown) => void }>(),
+				pendingRequestIds: new Set<string>(),
+				closed,
+				close: async () => {},
+			};
+			child.close = createRpcChildCloser(child, {});
+			rpcChild = child;
+			registry?.register(child);
+			rpcWrite.write({ type: "prompt", message: task });
+			state.fireUpdate();
 		});
 	} catch (error) {
 		removeLiveChild("failed");
@@ -286,13 +283,12 @@ export async function runSingleAttempt(
 			// Decided 2026-07-31: a detached child's RPC process is terminated
 			// (abort + graceful shutdown), not handed off; continued conversation
 			// with a detached child is deferred. The registry entry must not leak.
-			if (registry) {
-				const detached = registry.get(childKey);
-				if (detached) {
-					registry.unregister(childKey);
-					detached.write.write({ type: "abort" });
-					void detached.close("graceful");
-				}
+			const detached = registry?.get(childKey) ?? rpcChild;
+			if (detached) {
+				registry?.unregister(childKey);
+				detached.write.write({ type: "abort" });
+				if (registry) void detached.close("graceful");
+				else await detached.close("graceful");
 			}
 			return finalized;
 		}
@@ -312,10 +308,13 @@ export async function runSingleAttempt(
 					void resident.close("graceful");
 				}
 			}
+		} else if (rpcChild) {
+			await rpcChild.close("graceful");
 		}
 		removeLiveChild(finalized.exitCode === 0 && !finalized.error ? "completed" : "failed");
 		return finalized;
 	} catch (error) {
+		if (!registry && rpcChild) await rpcChild.close("graceful");
 		removeLiveChild("failed");
 		throw error;
 	}

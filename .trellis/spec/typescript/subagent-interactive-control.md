@@ -290,6 +290,12 @@ retains a test-only escape hatch. Modules:
 ```ts
 // pi-args
 buildPiArgs({ mode: "rpc" });                       // always --mode rpc, no -p, no positional task, no @file
+// foreground execution
+runSingleAttempt(..., options: RunSyncOptions, ...): Promise<SingleResult>;
+// foreground parallel input
+interface ForegroundParallelRunInput {
+  persistentChildRegistry?: RpcChildRegistry;
+}
 // rpc-protocol
 attachRpcProtocol(child): { write: RpcWrite; reader: RpcLineReader };
 // rpc-child-registry
@@ -312,13 +318,24 @@ createReopenBridge({ registry, getChildLaunchArgs, cwd }): ReopenBridge;
   accepted into the stream's internal buffer; only subsequent lines queue
   until `drain` (single persistent drain listener — `once` per write
   double-flushes).
-- Task delivery: RPC mode sends `prompt` over stdin after spawn; `@file` and
-  positional `Task:` text are never used (Pi RPC rejects `@file`, ignores
-  CLI positional messages).
-- Completion: `agent_settled` → logical completion → finalize result without
-  closing the process. `startFinalDrain` is disabled in RPC mode. Failed
-  runs (timeout/budget/interrupt/error) are evicted (unregister + graceful
-  close) — they have no conversational future.
+- Task delivery: every `runSingleAttempt` attaches `RpcWrite` and sends the
+  initial `prompt` over stdin after spawn, regardless of whether
+  `persistentChildRegistry` exists. `@file` and positional `Task:` text are
+  never used (Pi RPC rejects `@file`, ignores CLI positional messages).
+- Initial rendering: immediately after queuing the initial prompt,
+  `state.fireUpdate()` publishes a partial result whose progress status is
+  `running`. This gives the native parent `ToolExecutionComponent` a result
+  row and starts `renderSubagentResult`'s inline animation before the first
+  child stdout event.
+- Completion: `agent_settled` → logical completion → finalize result.
+  Registered successful children stay resident for direct conversation;
+  unregistered children are gracefully closed after finalization. Failed
+  registered runs (timeout/budget/interrupt/error) are evicted (unregister +
+  graceful close) because they have no conversational future.
+- Registry propagation: root foreground parallel execution carries
+  `ExecutorDeps.persistentChildRegistry` through
+  `ForegroundParallelRunInput` into every `runSync` call. Dropping it makes
+  the children execute but loses post-settle host-editor residency.
 - Registry invariants: one entry per child key; re-register replaces the
   handle (callers check `has()` first); evictIdle only touches settled
   children; evictOverflow evicts least-recently-active settled first, never
@@ -334,6 +351,9 @@ createReopenBridge({ registry, getChildLaunchArgs, cwd }): ReopenBridge;
   registry (never a second writer).
 - Async children live in a separate runner process; their RPC registry lives
   in that process and is closed gracefully before the runner exits.
+- Native child components receive a lazy adapter whose `requestRender()`
+  delegates to the real `TUI` captured by the host widget factory. Never cast
+  `ExtensionUIContext` to `TUI`: it does not implement `requestRender()`.
 
 ### Validation & Error Matrix
 
@@ -341,9 +361,27 @@ createReopenBridge({ registry, getChildLaunchArgs, cwd }): ReopenBridge;
 | --- | --- |
 | RPC child crashes while host-editor mode active | Mode auto-closes, widget removed, input returns to parent; session file intact |
 | `agent_settled` never arrives | Timeout/budget/interrupt paths terminate the process (failed run) |
+| Foreground execution has no registry | Prompt and initial running update are still delivered; after settle/finalization the RPC child closes gracefully |
+| Foreground parallel execution has a registry | Every task receives the same registry; successful settled children remain viewable by child key |
+| Native tool calls `setArgsComplete()` before/after widget mount | Lazy adapter no-ops before mount and delegates to the captured real TUI after mount; never throws |
 | Reopen while resident entry exists | Returns existing entry; never spawns a second writer |
 | `--no-session` child | `residentChild` continuity unavailable; viewer falls back to read-only/steer |
 | `persistentChildren` config | Deprecated no-op (2026-08-02): all children are RPC regardless; `PI_SUBAGENT_E2E_JSON_CHILD=1` keeps the test JSON path |
+
+### Good, Base, and Bad Cases
+
+- **Good:** a one-task foreground parallel call receives the root registry,
+  sends its task as an RPC prompt, publishes a running partial result, settles,
+  completes the parent tool, and remains available in the child viewer.
+- **Base:** a nested/direct caller has no registry. The same prompt and running
+  update are delivered, the parent tool completes on `agent_settled`, and the
+  child receives stdin EOF and exits without leaking.
+- **Bad:** guard `attachRpcProtocol()` or the initial `prompt` write with
+  `if (registry)`. The RPC process launches idle, produces no gateway request,
+  never settles, and leaves the parent tool's working indicator active.
+- **Bad:** pass `ctx.ui as TUI` into native child components. A tool call that
+  reaches `setArgsComplete()` throws because `ExtensionUIContext` has no
+  `requestRender()` method.
 
 ### Tests Required
 
@@ -352,10 +390,13 @@ createReopenBridge({ registry, getChildLaunchArgs, cwd }): ReopenBridge;
 - `test/unit/rpc-child-registry.test.ts` — one-writer, idle/overflow eviction,
   graceful vs force close.
 - `test/unit/host-editor-mode.test.ts` — routing matrix (ordinary/`//name`/
-  single `/`/`!bash`), close stops routing.
+  single `/`/`!bash`), close stops routing, native `setArgsComplete()` does not
+  throw, and repaint counts increase monotonically.
 - `test/unit/reopen-bridge.test.ts` — fresh reopen, one-writer guard, no-file.
 - `test/integration/foreground-rpc-child.test.ts` + async RPC tests — settle
-  → resident → evict; `--mode rpc` arg; task-over-stdin.
+  → resident → evict; `--mode rpc` arg; task-over-stdin; no-registry prompt +
+  first running update + graceful close; parallel registry propagation and
+  completion.
 
 ### Wrong vs Correct
 
@@ -371,6 +412,12 @@ if (!stdin.write(chunk)) { queue.push(chunk); }
 // Killing the settled child loses the session persist handshake.
 trySignalChild(proc, "SIGKILL"); // on successful agent_settled
 
+// Registry-gated transport leaves no-registry/nested RPC children idle.
+if (registry) attachRpcProtocol(proc).write.write({ type: "prompt", message: task });
+
+// ExtensionUIContext is not a TUI and has no requestRender implementation.
+createChildConversationAssembler({ ui: ctx.ui as unknown as TUI });
+
 // Parent writes the child's session file (second writer).
 SessionManager.open(childSessionFile).appendMessage(msg);
 ```
@@ -381,8 +428,20 @@ SessionManager.open(childSessionFile).appendMessage(msg);
 // LF-only JSONL writer with drain backpressure.
 rpcWrite.write({ type: "prompt", message: text, streamingBehavior });
 
-// Settle = logical completion; process stays resident; eviction closes it.
+// Transport is unconditional; registry registration controls retention only.
+const rpcWrite = attachRpcProtocol(proc).write;
+registry?.register(child);
+rpcWrite.write({ type: "prompt", message: task });
+state.fireUpdate();
+
+// Settle = logical completion; retained children stay resident.
 if (event.type === "agent_settled") state.finish(0);
+
+// Unretained children close gracefully after finalization.
+if (!registry) await child.close("graceful");
+
+// Native components delegate repaint to the widget factory's real TUI.
+const componentUi = { requestRender: () => widgetTui?.requestRender() } as TUI;
 
 // Graceful close persists the session (stdin EOF → Pi shutdown).
 await resident.close("graceful");

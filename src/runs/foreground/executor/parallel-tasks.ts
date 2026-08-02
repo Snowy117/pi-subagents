@@ -73,6 +73,8 @@ export async function runForegroundParallelTasks(input: ForegroundParallelRunInp
 			modelScope: input.modelScope,
 			skills: effectiveSkills === false ? [] : effectiveSkills,
 			foregroundLiveChildren: input.state.foregroundLiveChildren,
+			persistentChildren: true,
+			persistentChildRegistry: input.persistentChildRegistry,
 			timeoutMs: input.timeoutMs,
 			deadlineAt: input.deadlineAt,
 			turnBudget: input.turnBudget,

@@ -158,6 +158,14 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 		}
 	};
 
+	/** Lazy-delegating TUI stand-in for native components. ToolExecutionComponent
+	 *  calls this.ui.requestRender() from updateDisplay/setArgsComplete/etc.
+	 *  ExtensionUIContext has no requestRender, so passing ctx.ui directly
+	 *  crashes the assembler; this forwards to the mounted widget TUI instead
+	 *  (set when the widget factory runs; a no-op before mount, which is fine
+	 *  because nothing is visible yet). */
+	const componentUi = { requestRender } as unknown as TUI;
+
 	/** Feed raw RPC stdout lines: relay notify UI requests, everything else
 	 *  goes through the native assembler. Every parsed line is child activity,
 	 *  so each triggers a widget repaint (R1 streaming). */
@@ -267,7 +275,7 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 			hideThinkingOverride = undefined;
 			settingsReader = createViewerSettingsReader({ cwd: ctx.cwd });
 			assembler = createChildConversationAssembler({
-				ui: ctx.ui as unknown as TUI,
+				ui: componentUi,
 				cwd: ctx.cwd ?? "",
 				settings: settingsReader.read(),
 				toolOutputExpanded: currentExpanded(),

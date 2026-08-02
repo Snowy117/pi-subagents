@@ -69,6 +69,7 @@ export function buildForegroundParallelRunInput(
 		agents,
 		ctx,
 		state: deps.state,
+		persistentChildRegistry: deps.persistentChildRegistry,
 		intercomEvents: deps.pi.events,
 		signal,
 		runId,

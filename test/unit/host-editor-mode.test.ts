@@ -463,7 +463,7 @@ describe("host editor conversation mode", () => {
 		assert.notDeepEqual(afterTool, afterEnd, "tool events change the widget content");
 	});
 
-	it("requests a widget render for each streamed RPC line (R1 streaming trigger)", () => {
+	it("uses the mounted TUI for native tool updates and monotonically repaints streamed RPC lines", () => {
 		const resident = makeResident();
 		const mode = createHostEditorConversation({ resolveChildChannel: async () => undefined });
 		const ctx = fakeCtx();
@@ -471,14 +471,29 @@ describe("host editor conversation mode", () => {
 		const tui = makeMockTui();
 		renderWidget(ctx, tui); // mount the widget; the factory captures the tui handle
 		assert.equal(tui.requestRenderCalls, 0);
+		let previous = tui.requestRenderCalls;
 		resident.emitStdout(JSON.stringify({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Hel" }] } }) + "\n");
-		assert.equal(tui.requestRenderCalls, 1);
-		resident.emitStdout(JSON.stringify({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "Hello" }] } }) + "\n");
-		assert.equal(tui.requestRenderCalls, 2);
+		assert.ok(tui.requestRenderCalls > previous);
+		previous = tui.requestRenderCalls;
+		resident.emitStdout(JSON.stringify({ type: "message_update", message: { role: "assistant", content: [
+			{ type: "text", text: "Hello" },
+			{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "README.md" } },
+		] } }) + "\n");
+		assert.ok(tui.requestRenderCalls > previous);
+		previous = tui.requestRenderCalls;
+		assert.doesNotThrow(() => {
+			resident.emitStdout(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [
+				{ type: "text", text: "Hello" },
+				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "README.md" } },
+			], stopReason: "tool_use" } }) + "\n");
+		}, "ToolExecutionComponent.setArgsComplete must receive a requestRender-capable TUI");
+		assert.ok(tui.requestRenderCalls > previous);
+		previous = tui.requestRenderCalls;
 		resident.emitStdout(JSON.stringify({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} }) + "\n");
-		assert.equal(tui.requestRenderCalls, 3);
+		assert.ok(tui.requestRenderCalls > previous);
+		previous = tui.requestRenderCalls;
 		resident.emitStdout(JSON.stringify({ type: "tool_execution_update", toolCallId: "tool-1", partialResult: { content: [{ type: "text", text: "partial" }] } }) + "\n");
-		assert.equal(tui.requestRenderCalls, 4, "tool execution updates also repaint the widget");
+		assert.ok(tui.requestRenderCalls > previous, "tool execution updates also repaint the widget");
 		const lines = renderWidget(ctx, tui);
 		assert.ok(lines.some((line) => line.includes("Hello")), "the streamed content is visible in the widget");
 	});

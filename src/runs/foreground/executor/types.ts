@@ -98,6 +98,7 @@ export interface ForegroundParallelRunInput {
 	agents: AgentConfig[];
 	ctx: ExtensionContext;
 	state: SubagentState;
+	persistentChildRegistry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry;
 	intercomEvents: IntercomEventBus;
 	signal: AbortSignal;
 	runId: string;

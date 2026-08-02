@@ -76,6 +76,24 @@ describe("foreground persistent RPC child", { skip: !available ? "pi packages no
 		await registry.closeAll("graceful");
 	});
 
+	it("sends the initial prompt and running update without a registry, then closes the RPC child", async () => {
+		mockPi.onCall({ jsonl: [events.assistantMessage("unregistered done")] });
+		const updates: Array<{ content?: Array<{ text?: string }>; details?: { progress?: Array<{ status?: string }> } }> = [];
+
+		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Unregistered RPC task", {
+			runId: "rpc-no-registry",
+			onUpdate: (update: typeof updates[number]) => updates.push(update),
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.finalOutput, "unregistered done");
+		assert.equal(updates[0]?.details?.progress?.[0]?.status, "running");
+		assert.equal(updates[0]?.content?.[0]?.text, "(running...)", "initial partial result precedes child output");
+		const calls = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
+		const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, calls[0]!), "utf-8")) as { rpcPrompts?: Array<{ type?: string; message?: string }> };
+		assert.ok(payload.rpcPrompts?.some((entry) => entry.type === "prompt" && entry.message === "Unregistered RPC task"));
+	});
+
 	it("evicts a settled child gracefully and drops it from the registry", async () => {
 		const registry = makeRegistry();
 		mockPi.onCall({ jsonl: [events.assistantMessage("done")] });
@@ -127,7 +145,7 @@ describe("foreground persistent RPC child", { skip: !available ? "pi packages no
 
 		const result = await executor.execute(
 			"x",
-			{ agent: "echo", task: "Task", cwd: tempDir },
+			{ tasks: [{ agent: "echo", task: "Task" }], cwd: tempDir },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -137,5 +155,37 @@ describe("foreground persistent RPC child", { skip: !available ? "pi packages no
 		const resident = registry.entries();
 		assert.equal(resident.length, 1);
 		await registry.closeAll("graceful");
+	});
+
+	it("propagates the persistent registry through foreground parallel prompt delivery and completion", async () => {
+		const registry = makeRegistry();
+		mockPi.onCall({ jsonl: [events.assistantMessage("parallel rpc done")] });
+		const executor = createSubagentExecutor!({
+			pi: { events: createEventBus(), getSessionName: () => undefined },
+			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
+			config: { persistentChildren: true },
+			asyncByDefault: false,
+			persistentChildRegistry: registry,
+			tempArtifactsDir: tempDir,
+			getSubagentSessionRoot: () => tempDir,
+			expandTilde: (value: string) => value,
+			discoverAgents: () => ({ agents: [makeAgent("echo")] }),
+		});
+
+		const result = await executor.execute(
+			"parallel-rpc",
+			{ tasks: [{ agent: "echo", task: "Parallel RPC task" }], cwd: tempDir },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.ok(!result.isError, `parallel executor should complete: ${JSON.stringify(result)}`);
+		assert.match(result.content[0]?.text ?? "", /parallel rpc done/);
+		assert.equal(registry.entries().length, 1, "settled parallel child remains available to the viewer");
+		await registry.closeAll("graceful");
+		const calls = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
+		const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, calls[0]!), "utf-8")) as { rpcPrompts?: Array<{ type?: string; message?: string }> };
+		assert.ok(payload.rpcPrompts?.some((entry) => entry.type === "prompt" && entry.message?.includes("Parallel RPC task")));
 	});
 });
