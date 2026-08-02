@@ -39,6 +39,12 @@ export interface RpcChildRegistryDeps {
 	sleep?: (ms: number) => Promise<void>;
 }
 
+export interface RegistryEvictionOptions {
+	/** Key(s) excluded from eviction. Accepts a single key or an array (the
+	 *  runner bridge excludes every conversing child at once). */
+	except?: string | readonly string[];
+}
+
 export interface RpcChildRegistry {
 	get(key: string): PersistentRpcChild | undefined;
 	has(key: string): boolean;
@@ -46,9 +52,16 @@ export interface RpcChildRegistry {
 	settledCount(): number;
 	register(child: PersistentRpcChild): void;
 	unregister(key: string): boolean;
-	evictIdle(idleMs: number, opts?: { except?: string }): Promise<string[]>;
-	evictOverflow(maxResident: number, opts?: { except?: string }): Promise<string[]>;
+	evictIdle(idleMs: number, opts?: RegistryEvictionOptions): Promise<string[]>;
+	evictOverflow(maxResident: number, opts?: RegistryEvictionOptions): Promise<string[]>;
 	closeAll(kind: "graceful" | "force"): Promise<void>;
+}
+
+function excludedKeys(opts?: RegistryEvictionOptions): Set<string> | undefined {
+	const raw = opts?.except;
+	if (raw === undefined) return undefined;
+	const keys = typeof raw === "string" ? [raw] : raw;
+	return keys.length > 0 ? new Set(keys) : undefined;
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -83,10 +96,11 @@ export function createRpcChildRegistry(deps: RpcChildRegistryDeps = {}): RpcChil
 		unregister(key: string): boolean {
 			return children.delete(key);
 		},
-		async evictIdle(idleMs: number, opts?: { except?: string }): Promise<string[]> {
+		async evictIdle(idleMs: number, opts?: RegistryEvictionOptions): Promise<string[]> {
 			const cutoff = now() - idleMs;
+			const excluded = excludedKeys(opts);
 			const idle = [...children.values()].filter(
-				(child) => child.settled && child.lastActivityAt <= cutoff && child.key !== opts?.except,
+				(child) => child.settled && child.lastActivityAt <= cutoff && !(excluded?.has(child.key) ?? false),
 			);
 			const evicted: string[] = [];
 			for (const child of idle) {
@@ -96,9 +110,10 @@ export function createRpcChildRegistry(deps: RpcChildRegistryDeps = {}): RpcChil
 			}
 			return evicted;
 		},
-		async evictOverflow(maxResident: number, opts?: { except?: string }): Promise<string[]> {
+		async evictOverflow(maxResident: number, opts?: RegistryEvictionOptions): Promise<string[]> {
+			const excluded = excludedKeys(opts);
 			const settled = [...children.values()]
-				.filter((child) => child.settled && child.key !== opts?.except)
+				.filter((child) => child.settled && !(excluded?.has(child.key) ?? false))
 				.sort((a, b) => a.lastActivityAt - b.lastActivityAt);
 			const overflow = settled.length - maxResident;
 			if (overflow <= 0) return [];

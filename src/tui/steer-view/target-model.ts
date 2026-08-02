@@ -31,6 +31,9 @@ export interface ListSteerViewTargetsOptions {
 	asyncDirRoot?: string;
 	resultsDir?: string;
 	listRuns?: typeof listAsyncRuns;
+	/** Run states surfaced from disk; defaults to ALL states so reopenable
+	 *  terminal children stay selectable (continuity). */
+	asyncStates?: AsyncRunSummary["state"][];
 }
 
 function targetKey(kind: SteerViewTargetKind, runId: string, index: number): string {
@@ -160,7 +163,7 @@ export function listSteerViewTargets(state: SubagentState, options: ListSteerVie
 	let diskRuns: AsyncRunSummary[] = [];
 	try {
 		diskRuns = (options.listRuns ?? listAsyncRuns)(options.asyncDirRoot ?? ASYNC_DIR, {
-			states: ["queued", "running"], sessionId: state.currentSessionId ?? undefined,
+			states: options.asyncStates ?? ["queued", "running", "complete", "failed", "paused"], sessionId: state.currentSessionId ?? undefined,
 			resultsDir: options.resultsDir ?? RESULTS_DIR,
 		});
 	} catch {

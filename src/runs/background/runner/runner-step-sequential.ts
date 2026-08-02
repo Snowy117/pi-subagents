@@ -55,6 +55,7 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 		nestedRoute: state.config.nestedRoute,
 		persistentChildren: state.config.persistentChildren,
 		persistentChildRegistry: state.config.persistentChildRegistry,
+		conversationBridge: state.conversationBridge,
 		registerInterrupt: (interrupt) => ops.registerStepInterrupt(flatIndex, interrupt),
 		registerTimeout: (interrupt) => ops.registerStepTimeout(flatIndex, interrupt),
 		registerTurnBudgetAbort: (abort) => ops.registerStepTurnBudgetAbort(flatIndex, abort),

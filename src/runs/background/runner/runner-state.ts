@@ -250,6 +250,8 @@ export function createRunnerState(config: SubagentRunConfig): RunnerState {
 		currentActivityState: undefined,
 		activityTimer: undefined,
 		timeoutTimer: undefined,
+		conversationEvictionTimer: undefined,
+		conversationBridge: undefined,
 		timedOut: false,
 		turnBudgetExceeded: false,
 		previousCumulativeTokens: { input: 0, output: 0, total: 0 },

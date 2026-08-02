@@ -11,6 +11,7 @@ import { createRpcChildCloser } from "../../persistent/rpc-child-registry.ts";
 import { isMutatingTool } from "../../shared/long-running-guard.ts";
 import { appendDiagnosticJsonl, shouldPersistChildEvent } from "./event-logging.ts";
 import { emptyUsage, isTerminalAssistantStop } from "./usage-helpers.ts";
+import type { ConversationRelayHook } from "./conversation-bridge.ts";
 import type { ChildEvent, ChildEventContext, RunPiStreamingResult } from "./types.ts";
 
 export function runPiStreaming(
@@ -31,6 +32,7 @@ export function runPiStreaming(
 	persistent?: boolean,
 	registry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry,
 	task?: string,
+	conversationRelay?: ConversationRelayHook,
 ): Promise<RunPiStreamingResult> {
 	return new Promise((resolve) => {
 		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
@@ -93,6 +95,9 @@ export function runPiStreaming(
 
 		const processStdoutLine = (line: string) => {
 			if (!line.trim()) return;
+			// Mirror the raw RPC stdout line into the conversation relay so the
+			// parent viewer sees the identical stream (verbatim JSONL, LF framing).
+			conversationRelay?.appendParsedLine(line);
 			let event: ChildEvent;
 			try {
 				event = JSON.parse(line) as ChildEvent;
@@ -113,6 +118,9 @@ export function runPiStreaming(
 				if (persistent) {
 					settled = true;
 					clearDrainTimers();
+					if (conversationRelay && residentKey) {
+						conversationRelay.appendMarker({ type: "child_settled", key: residentKey });
+					}
 					const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
 					const finalError = error ?? assistantError;
 					const result: RunPiStreamingResult = {
@@ -318,6 +326,13 @@ export function runPiStreaming(
 		});
 		child.on("close", (exitCode, signal) => {
 			settled = true;
+			if (conversationRelay && residentKey) {
+				conversationRelay.appendMarker({
+					type: "child_closed",
+					key: residentKey,
+					reason: signal ? `signal:${signal}` : exitCode === null ? "closed" : `exit:${exitCode}`,
+				});
+			}
 			registerInterrupt?.(undefined);
 			registerTimeout?.(undefined);
 			registerTurnBudgetAbort?.(undefined);
@@ -348,6 +363,9 @@ export function runPiStreaming(
 
 		child.on("error", (spawnError) => {
 			settled = true;
+			if (conversationRelay && residentKey) {
+				conversationRelay.appendMarker({ type: "child_closed", key: residentKey, reason: "spawn-error" });
+			}
 			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
 			const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);
 			finishResolve({ stderr, exitCode: 1, messages, usage, model, error: timedOut ? (timeoutMessage ?? "Subagent timed out.") : turnBudgetExceeded ? turnBudgetMessage : error ?? assistantError ?? spawnErrorMessage, finalOutput: timedOut && !finalOutput.trim() ? (timeoutMessage ?? "Subagent timed out.") : finalOutput, timedOut, turnBudget, turnBudgetExceeded, wrapUpRequested: turnBudget?.outcome === "wrap-up-requested" || turnBudgetExceeded || undefined, observedMutationAttempt });
@@ -377,6 +395,7 @@ export function runPiStreaming(
 			resident.close = createRpcChildCloser(resident, {});
 			registry.register(resident);
 			residentKey = resident.key;
+			conversationRelay?.appendMarker({ type: "child_ready", key: resident.key });
 			rpcWrite.write({ type: "prompt", message: task ?? "" });
 		}
 	});

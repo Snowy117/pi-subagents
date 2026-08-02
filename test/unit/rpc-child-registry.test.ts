@@ -107,6 +107,32 @@ describe("createRpcChildRegistry", () => {
 		assert.equal(registry.has("idle"), false);
 	});
 
+	it("excludes multiple keys from idle and overflow eviction", async () => {
+		const now = () => 10_000;
+		const registry = createRpcChildRegistry({ now });
+		const conversingA = makeChild("conv-a", { settled: true, lastActivityAt: 1_000 });
+		const conversingB = makeChild("conv-b", { settled: true, lastActivityAt: 1_000 });
+		const idle = makeChild("idle", { settled: true, lastActivityAt: 1_000 });
+		registry.register(conversingA);
+		registry.register(conversingB);
+		registry.register(idle);
+		const idleEvicted = await registry.evictIdle(5_000, { except: ["conv-a", "conv-b"] });
+		assert.deepEqual(idleEvicted, ["idle"]);
+		assert.equal(registry.has("conv-a"), true);
+		assert.equal(registry.has("conv-b"), true);
+		const olderFresh = makeChild("older-fresh", { settled: true, lastActivityAt: 9_998 });
+		const fresh = makeChild("fresh", { settled: true, lastActivityAt: 9_999 });
+		const newer = makeChild("newer", { settled: true, lastActivityAt: 10_000 });
+		registry.register(olderFresh);
+		registry.register(fresh);
+		registry.register(newer);
+		const overflowEvicted = await registry.evictOverflow(2, { except: ["conv-a", "conv-b"] });
+		// Cap 2 over the excluded pair: the oldest non-excluded child is evicted.
+		assert.deepEqual(overflowEvicted, ["older-fresh"]);
+		assert.equal(registry.has("conv-a"), true);
+		assert.equal(registry.has("conv-b"), true);
+	});
+
 	it("skips the active viewer target during overflow eviction", async () => {
 		const now = () => 10_000;
 		const registry = createRpcChildRegistry({ now });

@@ -10,6 +10,13 @@ import { runParallelGroupStep } from "./runner-step-parallel.ts";
 import { runSequentialStep } from "./runner-step-sequential.ts";
 import { finalizeRun } from "./runner-finalize.ts";
 import { createRpcChildRegistry } from "../../persistent/rpc-child-registry.ts";
+import { loadConfig, resolvePersistentChildConfig } from "../../../extension/config.ts";
+import {
+	CONVERSATION_EVICTION_INTERVAL_MS,
+	createRunnerConversationBridge,
+	lingerForConversations,
+	type RunnerConversationBridge,
+} from "./conversation-bridge.ts";
 import type { SubagentRunConfig } from "./types.ts";
 
 const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
@@ -22,6 +29,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const persistentChildRegistry = config.persistentChildren === true ? createRpcChildRegistry() : undefined;
 	if (persistentChildRegistry) {
 		config.persistentChildRegistry = persistentChildRegistry;
+	}
+	const conversationBridge: RunnerConversationBridge | undefined = persistentChildRegistry
+		? createRunnerConversationBridge({ asyncDir: state.asyncDir, registry: persistentChildRegistry })
+		: undefined;
+	state.conversationBridge = conversationBridge;
+	if (conversationBridge) {
+		// Best-effort shutdown hygiene: a dead runner must never leave stale
+		// heartbeats that the parent would read as an alive conversation.
+		process.once("exit", () => conversationBridge.clearHeartbeats());
 	}
 
 	fs.mkdirSync(state.asyncDir, { recursive: true });
@@ -46,6 +62,20 @@ export async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			else state.pendingStepSteers.push(request);
 		},
 	});
+	if (conversationBridge && persistentChildRegistry) {
+		// Runner-side eviction loop mirroring the parent extension: settled
+		// children idle > idleEvictionMs or beyond the cap are evicted, never
+		// a child with a fresh conversation heartbeat. Config is re-read each
+		// tick so idle/cap changes apply without a restart.
+		state.conversationEvictionTimer = setInterval(() => {
+			const current = resolvePersistentChildConfig(loadConfig());
+			if (!current.enabled) return;
+			const exceptKeys = conversationBridge.conversingRegistryKeys();
+			void persistentChildRegistry.evictIdle(current.idleEvictionMs, { except: exceptKeys });
+			void persistentChildRegistry.evictOverflow(current.maxResidentChildren, { except: exceptKeys });
+		}, CONVERSATION_EVICTION_INTERVAL_MS);
+		state.conversationEvictionTimer.unref?.();
+	}
 	if (config.deadlineAt !== undefined) {
 		const remainingMs = Math.max(0, config.deadlineAt - Date.now());
 		state.timeoutTimer = setTimeout(() => ops.timeoutRunner(), remainingMs);
@@ -89,6 +119,20 @@ export async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 	await finalizeRun(state, ops, disposeControlInbox);
 	if (persistentChildRegistry) {
+		// Q3=A: after finalize the runner lingers while any conversing child
+		// keeps a fresh heartbeat, so the user can keep talking to a settled
+		// child with zero continuity gap. Interrupt/timeout paths close
+		// promptly (the gate below), and the heartbeat TTL caps any dead-runner
+		// wait at ~30s even if the parent dies mid-conversation.
+		if (conversationBridge && !state.interrupted && !state.timedOut && !state.turnBudgetExceeded) {
+			await lingerForConversations({ bridge: conversationBridge });
+		}
+		if (state.conversationEvictionTimer) {
+			clearInterval(state.conversationEvictionTimer);
+			state.conversationEvictionTimer = undefined;
+		}
+		conversationBridge?.stopAll();
+		conversationBridge?.clearHeartbeats();
 		await persistentChildRegistry.closeAll("graceful");
 	}
 }

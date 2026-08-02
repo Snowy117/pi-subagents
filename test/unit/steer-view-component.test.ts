@@ -4,16 +4,22 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { visibleWidth, type TUI } from "@earendil-works/pi-tui";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { claimControlActionRequests, writeControlActionResponse } from "../../src/runs/shared/control-actions/channel.ts";
 import { consumeSteerRequestsFromDir, steerDeliveryMarker } from "../../src/runs/background/control-channel.ts";
 import { SteerViewComponent, type SteerViewResult } from "../../src/tui/steer-view/steer-view-component.ts";
 import type { SteerViewTarget } from "../../src/tui/steer-view/target-model.ts";
 
+// Native components (UserMessageComponent et al.) resolve the active theme
+// through pi's global theme; the extension calls initTheme at startup, unit
+// tests must do the same before assembling (see child-conversation-assembler).
+initTheme();
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
-function harness(refreshTarget?: () => SteerViewTarget | undefined) {
+function harness(refreshTarget?: () => SteerViewTarget | undefined, getToolsExpanded?: () => boolean) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "steer-component-"));
 	roots.push(root);
 	const transcriptPath = path.join(root, "transcript.jsonl");
@@ -32,7 +38,7 @@ function harness(refreshTarget?: () => SteerViewTarget | undefined) {
 		bold: (text: string) => text,
 	} as Theme;
 	const results: SteerViewResult[] = [];
-	const component = new SteerViewComponent(tui, theme, target, (result) => results.push(result), { autoStart: false, refreshTarget });
+	const component = new SteerViewComponent(tui, theme, target, (result) => results.push(result), { autoStart: false, refreshTarget, getToolsExpanded });
 	return { root, target, component, results, renders: () => renders, transcriptPath };
 }
 
@@ -126,6 +132,28 @@ describe("SteerViewComponent", () => {
 		const scrolled = component.render(18).join("\n");
 		assert.notEqual(scrolled, atBottom);
 		component.dispose();
+	});
+
+	it("renders the degraded header and native components for full message records", () => {
+		const { component, transcriptPath } = harness(undefined, () => true);
+		fs.appendFileSync(transcriptPath, `${JSON.stringify({ recordType: "message", ts: 2, role: "user", message: { role: "user", content: [{ type: "text", text: "hello worker" }] } })}\n`);
+		fs.appendFileSync(transcriptPath, `${JSON.stringify({ recordType: "message", ts: 3, role: "assistant", message: { role: "assistant", content: [{ type: "text", text: "I will read the file." }, { type: "toolCall", id: "call-1", name: "read", arguments: { filePath: "a.ts" } }] } })}\n`);
+		fs.appendFileSync(transcriptPath, `${JSON.stringify({ recordType: "message", ts: 4, role: "toolResult", message: { role: "toolResult", toolCallId: "call-1", content: [{ type: "text", text: "result contents" }] } })}\n`);
+		component.poll();
+		const out = component.render(80).join("\n");
+		assert.match(out, /continuity unavailable/);
+		assert.match(out, /hello worker/);
+		assert.match(out, /I will read the file/);
+		assert.match(out, /result contents/);
+		component.dispose();
+
+		// Collapsed default (getToolsExpanded absent): the paired tool card
+		// shows its name without the result body, like the main view.
+		const collapsed = harness();
+		fs.appendFileSync(collapsed.transcriptPath, `${JSON.stringify({ recordType: "message", ts: 2, role: "assistant", message: { role: "assistant", content: [{ type: "toolCall", id: "call-2", name: "grep", arguments: { pattern: "x" } }] } })}\n`);
+		collapsed.component.poll();
+		assert.match(collapsed.component.render(80).join("\n"), /grep/);
+		collapsed.component.dispose();
 	});
 
 	it("attaches to a transcript path discovered after a queued target starts", () => {

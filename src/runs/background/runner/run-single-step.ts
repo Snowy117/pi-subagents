@@ -16,7 +16,7 @@ import { isTerminalAssistantStop } from "./usage-helpers.ts";
 import type { ArtifactPaths, ModelAttempt, ToolBudgetState, TurnBudgetState } from "../../../shared/types.ts";
 import type { RunPiStreamingResult, SingleStepContext } from "./types.ts";
 import type { RunnerSubagentStep as SubagentStep } from "../../shared/parallel-utils.ts";
-import { buildSingleStepResult, buildStepPiArgs, writeStepArtifactFiles } from "./run-single-step-helpers.ts";
+import { buildSingleStepResult, buildStepPiArgs, runImportedAsyncRootStep, writeStepArtifactFiles } from "./run-single-step-helpers.ts";
 
 /** Run a single pi agent step, returning output and metadata */
 export async function runSingleStep(
@@ -81,6 +81,10 @@ export async function runSingleStep(
 	}
 	transcriptWriter?.writeInitialUserMessage(task);
 
+	const conversationRelay = ctx.persistentChildRegistry && ctx.conversationBridge
+		? ctx.conversationBridge.relayFor(step.agent, ctx.flatIndex, `${ctx.id}/${ctx.flatIndex}`)
+		: undefined;
+
 	const candidates = step.modelCandidates && step.modelCandidates.length > 0
 		? step.modelCandidates
 		: step.model
@@ -128,6 +132,7 @@ export async function runSingleStep(
 			ctx.persistentChildren === true,
 			ctx.persistentChildRegistry,
 			task,
+			conversationRelay,
 		);
 		if (run.turnBudget) turnBudget = run.turnBudget;
 		else if (ctx.turnBudget) {

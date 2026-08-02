@@ -2,9 +2,11 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { SubagentState } from "../../shared/types.ts";
+import { createLocalRpcChannel, type ChildConversationChannel } from "../child-conversation/channel.ts";
 import { RunPickerComponent } from "./run-picker.ts";
 import { SteerViewComponent, type SteerViewResult } from "./steer-view-component.ts";
 import { listSteerViewTargets, type ListSteerViewTargetsOptions, type SteerViewTarget } from "./target-model.ts";
+import type { ResolveChildChannel } from "./child-channel.ts";
 
 export interface SteerViewController {
 	readonly modalOpen: boolean;
@@ -16,9 +18,14 @@ export interface SteerViewController {
 export interface SteerViewControllerOptions extends ListSteerViewTargetsOptions {
 	isStaleContextError?: (error: unknown) => boolean;
 	trustedRoots?: (ctx: ExtensionContext) => string[];
-	/** Optional host-editor routing mode; when a resident child exists the picker
-	 *  activates it instead of the full-screen overlay chat. */
+	/** Optional host-editor routing mode; when a child channel can be resolved
+	 *  the picker activates it instead of the full-screen overlay chat. */
 	hostEditor?: import("./host-editor-mode.ts").HostEditorConversationHandle;
+	/** Resolve (possible reopen/bridge) the child conversation channel; the
+	 *  host-editor path uses it instead of a resident handle directly. */
+	resolveChildChannel?: ResolveChildChannel;
+	/** Synchronous picker predicate: is there a live resident for this target?
+	 *  (Session-file reopenability is derived from the target itself.) */
 	getResidentChild?: (target: SteerViewTarget) => import("../../runs/persistent/rpc-child-registry.ts").PersistentRpcChild | undefined;
 }
 
@@ -33,7 +40,12 @@ export function createSteerViewController(
 	let cancelEpoch = 0;
 	let closeCurrent: (() => void) | undefined;
 	const showPicker = async (ctx: ExtensionContext): Promise<SteerViewTarget | undefined> => {
-		const targets = listSteerViewTargets(_state, options).filter((target) => target.active || (options.getResidentChild?.(target) !== undefined));
+		// Selectable: a live child (active/resident) or any target with a
+		// persisted session the resolver can reopen (no continuity ⇒ hidden).
+		const targets = listSteerViewTargets(_state, options).filter((target) =>
+			target.active
+			|| options.getResidentChild?.(target) !== undefined
+			|| Boolean(target.sessionFile));
 		if (targets.length === 0) {
 			ctx.ui.notify("No active subagent children to view.", "info");
 			return undefined;
@@ -51,11 +63,13 @@ export function createSteerViewController(
 		trustedRoots: [...new Set([...(target.trustedRoots ?? []), ...(options.trustedRoots?.(ctx) ?? [])])],
 	});
 	const showChat = async (ctx: ExtensionContext, target: SteerViewTarget): Promise<SteerViewResult> => {
-		// Host-editor routing mode: when the selected child has a resident RPC
-		// process (Option B), keep the real editor and route submissions to the
-		// child; the widget shows the transcript above the editor. Activation
-		// happens synchronously; open() observes hostEditor.active and exits.
-		if (options.hostEditor && options.getResidentChild) {
+		// Host-editor routing mode: resolve the child conversation channel and
+		// keep the real editor, routing submissions to the child; the widget
+		// shows the transcript above the editor. Activation happens
+		// synchronously; open() observes hostEditor.active and exits. When no
+		// channel can be resolved (no resident, no bridge, no reopenable
+		// session) the custom overlay is the explicit degraded surface.
+		if (options.hostEditor && (options.resolveChildChannel || options.getResidentChild)) {
 			// Re-selecting the active target is a no-op for host-editor mode.
 			if (options.hostEditor.active && options.hostEditor.targetKey === target.key) {
 				return { kind: "picker" };
@@ -65,8 +79,21 @@ export function createSteerViewController(
 			if (options.hostEditor.active && options.hostEditor.targetKey !== target.key) {
 				options.hostEditor.close(ctx);
 			}
-			const resident = options.getResidentChild(target);
-			if (options.hostEditor.open(ctx, target, resident)) {
+			let channel: ChildConversationChannel | undefined;
+			if (options.resolveChildChannel) {
+				try {
+					channel = await options.resolveChildChannel(ctx, target);
+				} catch {
+					// A resolver failure degrades to the overlay; it must not crash
+					// the picker flow.
+				}
+			} else {
+				// Backward-compatible pre-Phase-5 path: a caller that only wires
+				// the synchronous resident getter keeps host-editor behavior.
+				const resident = options.getResidentChild?.(target);
+				channel = resident ? createLocalRpcChannel(resident) : undefined;
+			}
+			if (options.hostEditor.open(ctx, target, channel)) {
 				ctx.ui.notify(`Conversation routed to ${target.agent} (child mode). Use /subagents exit to return.`, "info");
 				return { kind: "picker" };
 			}
@@ -77,6 +104,15 @@ export function createSteerViewController(
 					refreshTarget: () => {
 						const refreshed = listSteerViewTargets(_state, options).find((candidate) => candidate.key === target.key);
 						return refreshed ? withTrustedRoots(ctx, refreshed) : undefined;
+					},
+					cwd: ctx.cwd,
+					getToolsExpanded: () => {
+						try {
+							return ctx.ui.getToolsExpanded();
+						} catch {
+							// A stale UI context must not break the degraded surface.
+							return false;
+						}
 					},
 				});
 				closeCurrent = () => done({ kind: "picker" });

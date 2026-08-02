@@ -20,6 +20,7 @@ import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { renderWidget } from "../tui/render.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createRpcChildRegistry } from "../runs/persistent/rpc-child-registry.ts";
+import { listAsyncRuns } from "../runs/background/async-status.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
@@ -53,6 +54,9 @@ import { ensureAccessibleDir, expandTilde, getSubagentSessionRoot, isStaleExtens
 import { createSteerViewRuntime } from "../tui/steer-view/registration.ts";
 import { createHostEditorConversation } from "../tui/steer-view/host-editor-mode.ts";
 import { createReopenBridge } from "../tui/steer-view/reopen-bridge.ts";
+import { createChildKeyRoute } from "../tui/steer-view/child-key-route.ts";
+import { createChildChannelResolver } from "../tui/steer-view/child-channel.ts";
+import { closeAllOpenAsyncBridgeChannels } from "../tui/steer-view/async-bridge-channel.ts";
 
 export { loadConfig } from "./config.ts";
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
@@ -123,10 +127,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			return ["--mode", "rpc", "--session", target.sessionFile, "--extension", PROMPT_RUNTIME_EXTENSION_PATH];
 		},
 	});
-	const getResidentChild = (target: import("./tui/steer-view/target-model.ts").SteerViewTarget) => {
+	const getForegroundResident = (target: import("../tui/steer-view/target-model.ts").SteerViewTarget) => {
 		// target.key is "kind:runId:index"; the foreground registry is keyed
 		// "runId/index". Async children live in the runner process and are
-		// resolved via a cross-process bridge (Phase 5), not here.
+		// resolved via the conversation bridge (Phase 4/5), not here.
 		const [kind, runId, indexText] = target.key.split(":");
 		if (kind !== "foreground" || !runId || !indexText) return undefined;
 		const key = `${runId}/${indexText}`;
@@ -137,17 +141,40 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			// (belt-and-suspenders for entries left by older runs/crashes).
 			if (existing.proc.exitCode !== null) {
 				persistentChildRegistry.unregister(key);
-				return reopenBridge.reopen(target);
+				return undefined;
 			}
 			return existing;
 		}
-		// Reopen an evicted settled child's session when it has a persisted
-		// session file; the registry guard prevents concurrent writers.
-		return reopenBridge.reopen(target);
+		return undefined;
 	};
-	const hostEditorConversation = createHostEditorConversation({
-		getResidentChild,
+	// THE single sync/async branch point (R0): foreground resident/reopen,
+	// async queued/running via the runner-side conversation bridge, async
+	// terminal via registry-guarded session reopen after the runner is gone.
+	const resolveChildChannel = createChildChannelResolver({
+		getForegroundResident,
+		reopenBridge,
+		listRuns: (root, options) => listAsyncRuns(root, {
+			states: ["queued", "running", "complete", "failed", "paused"],
+			sessionId: state.currentSessionId ?? undefined,
+			resultsDir: RESULTS_DIR,
+			...options,
+		}),
 	});
+	const hostEditorConversation = createHostEditorConversation({
+		resolveChildChannel,
+	});
+	// Child-mode app-level key routing (R1b): gated by config (default on),
+	// consumed by registration through ctx.ui.onTerminalInput while the mode is
+	// active. Disabling restores main-agent key semantics wholesale.
+	const childKeyRoute = config.childKeyRoute !== false
+		? createChildKeyRoute({
+			getActiveChannel: () => hostEditorConversation.getActiveChannel(),
+			isStreaming: () => hostEditorConversation.isStreaming(),
+			getUi: () => hostEditorConversation.getUiContext()?.ui,
+			onToolsExpand: () => hostEditorConversation.toggleToolExpansion(),
+			onThinkingToggle: () => hostEditorConversation.toggleThinkingHidden(),
+		})
+		: undefined;
 
 	// Option B eviction loop: settle idle resident children and enforce the
 	// resident cap. Runs every minute; config changes take effect on next tick.
@@ -166,7 +193,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	evictionTimer.unref?.();
 	const steerView = createSteerViewRuntime(state, config, {
 		hostEditor: hostEditorConversation,
-		getResidentChild,
+		hostEditorResolver: resolveChildChannel,
+		getResidentChild: getForegroundResident,
+		keyRoute: childKeyRoute,
 	});
 
 	const unregisterInputHandler = pi.on("input", (event) => {
@@ -336,6 +365,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		delete process.env[SUBAGENT_PARENT_SESSION_ENV];
 		steerView.closeSession();
 		hostEditorConversation.close(undefined);
+		// Stop any bridge heartbeats still being refreshed so the runner's
+		// linger loop can exit; Local resident children are closed below.
+		closeAllOpenAsyncBridgeChannels();
 		void persistentChildRegistry.closeAll("graceful");
 		for (const unsubscribe of eventUnsubscribes) {
 			try {

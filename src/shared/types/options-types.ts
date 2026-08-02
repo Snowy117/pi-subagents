@@ -135,6 +135,10 @@ export interface ExtensionConfig {
 			maxResidentChildren?: number;
 		};
 	};
+	/** Routing of app-level keys (Esc abort, model/thinking cycle+select,
+	 *  tools expand, thinking toggle) to the child while child mode is active.
+	 *  Default: true. */
+	childKeyRoute?: boolean;
 	completionBatch?: CompletionBatchConfig;
 	turnBudget?: TurnBudgetConfig;
 	toolBudget?: ToolBudgetConfig;

@@ -174,6 +174,8 @@ export interface SingleStepContext {
 	persistentChildren?: boolean;
 	/** Parent-side registry for resident RPC children. */
 	persistentChildRegistry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry;
+	/** Runner-side conversation bridge for this child's step (Phase 4). */
+	conversationBridge?: import("./conversation-bridge.ts").RunnerConversationBridge;
 }
 
 export type RunnerStatusStep = NonNullable<AsyncStatus["steps"]>[number] & {

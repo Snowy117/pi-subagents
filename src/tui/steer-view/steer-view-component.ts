@@ -1,9 +1,12 @@
-import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { Input, Markdown, Text, matchesKey, truncateToWidth, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { Input, matchesKey, truncateToWidth, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { retainLiveTranscript } from "../../shared/live-transcript.ts";
 import { consumeTargetActionResponse, requestTargetThinkingCycle, sendTargetSteer, type QueuedSteer } from "./control-routing.ts";
 import { createTranscriptTail, readTranscriptFallback, trustedRootsForTarget, type SteerTranscriptRecord } from "./transcript-tail.ts";
 import type { SteerViewTarget } from "./target-model.ts";
+import { createChildConversationAssembler, type ChildConversationAssembler } from "../child-conversation/assembler.ts";
+import { createViewerSettingsReader } from "../child-conversation/viewer-settings.ts";
+import type { TranscriptSeedRecord } from "../child-conversation/assembly-types.ts";
 
 export type SteerViewResult = { kind: "picker" } | { kind: "slash"; text: string };
 
@@ -13,27 +16,43 @@ export interface SteerViewComponentOptions {
 	clearInterval?: typeof clearInterval;
 	autoStart?: boolean;
 	refreshTarget?: () => SteerViewTarget | undefined;
+	/** Project working directory for project-scoped viewer settings. */
+	cwd?: string;
+	/** Tool-expansion state (public `ctx.ui.getToolsExpanded()` when available;
+	 *  defaults to collapsed when absent, matching the app default). */
+	getToolsExpanded?: () => boolean;
 }
 
-function recordText(record: SteerTranscriptRecord): string {
-	if (record.recordType === "message") return record.text ?? "";
-	if (record.recordType === "tool_start") return `▶ ${record.toolName ?? "tool"}${record.argsPreview ? ` ${record.argsPreview}` : ""}`;
-	if (record.recordType === "tool_end") return `✓ ${record.toolName ?? "tool"}`;
-	return record.text ?? "";
+/** Transcript records normally carry the full serialized Message object the
+ *  native assembler seeds from. Limited/legacy writers may omit it; synthesize
+ *  a minimal Message so the record still renders as a real native component
+ *  instead of being dropped. */
+function toSeedRecord(record: SteerTranscriptRecord): TranscriptSeedRecord {
+	if (record.recordType !== "message" || !record.role || record.message) return record;
+	return {
+		recordType: "message",
+		ts: record.ts,
+		role: record.role,
+		// Native components expect block-array content (AssistantMessageComponent
+		// iterates content as an array); synthesize a text block.
+		message: { role: record.role, content: [{ type: "text", text: record.text ?? "" }] },
+	};
 }
 
-function messageLines(record: SteerTranscriptRecord, width: number, theme: Theme): string[] {
-	const text = recordText(record);
-	if (!text) return [];
-	if (record.recordType === "message" && record.role === "assistant") return new Markdown(text, 0, 0, getMarkdownTheme()).render(width);
-	const role = record.recordType === "message" ? `${record.role ?? "message"}: ` : "";
-	const color = record.recordType === "truncated" ? "warning" : record.role === "user" ? "accent" : "muted";
-	const lines = new Text(theme.fg(color, `${role}${text}`), 0, 0).render(width);
-	return record.role === "user" ? lines.map((line) => theme.bg("userMessageBg", line)) : lines;
-}
-
+/**
+ * Degraded child-conversation surface: full-screen overlay used only when no
+ * ChildConversationChannel can be resolved (no resident child, no runner-side
+ * bridge, no reopenable session — e.g. `--no-session`). The header states
+ * explicitly that conversation continuity is unavailable; the transcript
+ * renders through the SAME native child-conversation assembler the host-editor
+ * widget uses (User/Assistant/ToolExecution/Custom/Bash components, settings
+ * aware), so the degraded path never falls back to self-drawn message lines.
+ * Steer, thinking-cycle, scroll, and Input behaviors are unchanged.
+ */
 export class SteerViewComponent implements Component, Focusable {
 	private readonly input = new Input();
+	private readonly assembler: ChildConversationAssembler;
+	private readonly settingsReader: ReturnType<typeof createViewerSettingsReader>;
 	private tail;
 	private releaseTranscript: () => void;
 	private tailPath?: string;
@@ -74,6 +93,13 @@ export class SteerViewComponent implements Component, Focusable {
 			: undefined;
 		this.tailPath = target.transcriptPath;
 		this.releaseTranscript = retainLiveTranscript(target.transcriptPath);
+		this.settingsReader = createViewerSettingsReader({ cwd: options.cwd });
+		this.assembler = createChildConversationAssembler({
+			ui: tui,
+			cwd: options.cwd ?? "",
+			settings: this.settingsReader.read(),
+			toolOutputExpanded: this.readExpanded(),
+		});
 		this.input.onSubmit = (value) => this.submit(value);
 		this.input.onEscape = () => this.done({ kind: "picker" });
 		this.poll();
@@ -81,6 +107,31 @@ export class SteerViewComponent implements Component, Focusable {
 			this.timer = (options.setInterval ?? setInterval)(() => this.poll(), options.pollIntervalMs ?? 250);
 			this.timer.unref?.();
 		}
+	}
+
+	private readExpanded(): boolean {
+		try {
+			return this.options.getToolsExpanded?.() ?? false;
+		} catch {
+			// A stale UI context must not break the settings pass.
+			return false;
+		}
+	}
+
+	/** Re-apply settings (TTL-cached disk reads) so /settings toggles and tool
+	 *  expansion state land on the next render pass, like the host-editor
+	 *  widget's per-render settings pass. */
+	private applySettingsPass(): void {
+		this.assembler.applySettings(this.settingsReader.read(), this.readExpanded());
+	}
+
+	/** Feed newly-polled records into the native assembler. A transcript
+	 *  replace/rotate (reset) rebuilds the assembled tree from the re-read
+	 *  beginning so stale components never linger. */
+	private feedRecords(records: readonly SteerTranscriptRecord[], reset: boolean): void {
+		if (!this.assembler) return;
+		if (reset) this.assembler.dispose();
+		if (records.length > 0) this.assembler.seedTranscriptRecords(records.map(toSeedRecord));
 	}
 
 	poll(): void {
@@ -102,6 +153,7 @@ export class SteerViewComponent implements Component, Focusable {
 		if (update.reset) this.records = [];
 		if (update.records.length > 0) {
 			this.records.push(...update.records);
+			this.feedRecords(update.records, update.reset);
 			if (this.records.length > 1000) this.records.splice(0, this.records.length - 1000);
 			if (wasFollowing) this.scrollOffset = 0;
 			else this.unseen += update.records.length;
@@ -190,11 +242,12 @@ export class SteerViewComponent implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
+		this.applySettingsPass();
 		const safeWidth = Math.max(1, width);
-		const header = `${this.target.agent} · ${this.target.runId}:${this.target.index} · ${this.target.status}${this.thinkingLevel ? ` · thinking ${this.thinkingLevel}` : ""}`;
+		const header = `subagent: ${this.target.agent} · ${this.target.runId}:${this.target.index} · ${this.target.status} · continuity unavailable${this.thinkingLevel ? ` · thinking ${this.thinkingLevel}` : ""}`;
 		const footerRows = 3;
 		const available = Math.max(1, this.tui.terminal.rows - footerRows);
-		const rendered = this.records.flatMap((record) => [...messageLines(record, safeWidth, this.theme), ""]);
+		const rendered = this.assembler.container.render(safeWidth);
 		this.scrollOffset = Math.min(this.scrollOffset, Math.max(0, rendered.length - available));
 		const end = Math.max(0, rendered.length - this.scrollOffset);
 		const body = rendered.slice(Math.max(0, end - available), end);
@@ -208,11 +261,15 @@ export class SteerViewComponent implements Component, Focusable {
 		];
 	}
 
-	invalidate(): void { this.input.invalidate(); }
+	invalidate(): void {
+		this.input.invalidate();
+		this.assembler.container.invalidate();
+	}
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
 		if (this.timer) (this.options.clearInterval ?? clearInterval)(this.timer);
 		this.releaseTranscript();
+		this.assembler.dispose();
 	}
 }

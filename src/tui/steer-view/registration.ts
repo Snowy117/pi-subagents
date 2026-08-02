@@ -17,13 +17,19 @@ export interface SteerViewRuntime {
 
 export interface SteerViewRuntimeOptions {
 	hostEditor?: import("./host-editor-mode.ts").HostEditorConversationHandle;
+	hostEditorResolver?: import("./child-channel.ts").ResolveChildChannel;
 	getResidentChild?: (target: import("./target-model.ts").SteerViewTarget) => import("../../runs/persistent/rpc-child-registry.ts").PersistentRpcChild | undefined;
+	/** Optional child-mode app-level key router (R1b); registered with
+	 *  onTerminalInput while the session is active, gated internally on child
+	 *  mode being active. */
+	keyRoute?: import("./child-key-route.ts").ChildKeyRoute;
 }
 
 export function createSteerViewRuntime(state: SubagentState, extensionConfig: ExtensionConfig, options: SteerViewRuntimeOptions = {}): SteerViewRuntime {
 	const config = resolveTuiConfig(extensionConfig);
 	const controller = createSteerViewController(state, {
 		hostEditor: options.hostEditor,
+		resolveChildChannel: options.hostEditorResolver,
 		getResidentChild: options.getResidentChild,
 		isStaleContextError: isStaleExtensionContextError,
 		trustedRoots: (ctx) => {
@@ -47,8 +53,21 @@ export function createSteerViewRuntime(state: SubagentState, extensionConfig: Ex
 		startSession(ctx): void {
 			controller.close();
 			unsubscribeTerminalInput();
-			terminalInputUnsubscribe = ctx.hasUI
-				? ctx.ui.onTerminalInput((input) => handleSubagentsDown(input, ctx, state, controller, config))
+			const handlers: Array<(input: string) => { consume?: boolean } | undefined> = [];
+			if (ctx.hasUI) {
+				handlers.push((input) => handleSubagentsDown(input, ctx, state, controller, config));
+				if (options.keyRoute) handlers.push((input) => options.keyRoute?.handleInput(input));
+			}
+			// Terminal listeners run in registration order; each returns undefined
+			// when it does not own the input so the editor still receives it.
+			terminalInputUnsubscribe = handlers.length > 0
+				? ctx.ui.onTerminalInput((input) => {
+					for (const handler of handlers) {
+						const result = handler(input);
+						if (result) return result;
+					}
+					return undefined;
+				})
 				: undefined;
 		},
 		closeSession(): void {
@@ -57,6 +76,7 @@ export function createSteerViewRuntime(state: SubagentState, extensionConfig: Ex
 		},
 		dispose(): void {
 			controller.dispose();
+			options.keyRoute?.dispose();
 			cleanupSessionResources();
 		},
 	};

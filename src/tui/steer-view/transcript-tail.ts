@@ -11,6 +11,10 @@ export interface SteerTranscriptRecord {
 	text?: string;
 	toolName?: string;
 	argsPreview?: string;
+	/** Full serialized Message object persisted by the transcript writer
+	 *  (present on `message` records). The native assembler seeds its item
+	 *  tree from these instead of the slim text projection. */
+	message?: unknown;
 }
 
 export interface TranscriptTailPoll {
@@ -63,7 +67,12 @@ function parseRecord(line: string): SteerTranscriptRecord | undefined {
 	}
 	if (record.recordType === "message") {
 		if (typeof record.role !== "string") return undefined;
-		return { recordType: "message", ts, role: record.role, ...(typeof record.text === "string" ? { text: record.text } : {}) };
+		const hasMessage = typeof record.message === "object" && record.message !== null;
+		return {
+			recordType: "message", ts, role: record.role,
+			...(typeof record.text === "string" ? { text: record.text } : {}),
+			...(hasMessage ? { message: record.message } : {}),
+		};
 	}
 	if (record.recordType === "tool_start" || record.recordType === "tool_end") {
 		return {
