@@ -383,3 +383,36 @@ Unified child conversation: full-height native-component assembler widget (user/
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Fix persistent subagent startup and TUI rendering
+
+**Date**: 2026-08-02
+**Task**: Fix persistent subagent startup and TUI rendering
+**Branch**: `main`
+
+### Summary
+
+Fixed idle foreground parallel RPC children, restored immediate running tool animation and completion, routed native child components through the real widget TUI to prevent requestRender crashes, added regression coverage, and documented the cross-layer RPC/TUI contracts.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1a578dd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
