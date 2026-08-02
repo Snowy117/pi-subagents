@@ -1,7 +1,7 @@
-import { Input, matchesKey, truncateToWidth, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { retainLiveTranscript } from "../../shared/live-transcript.ts";
-import { consumeTargetActionResponse, requestTargetThinkingCycle, sendTargetSteer, type QueuedSteer } from "./control-routing.ts";
+import { consumeTargetActionResponse, requestTargetThinkingCycle } from "./control-routing.ts";
 import { createTranscriptTail, readTranscriptFallback, trustedRootsForTarget, type SteerTranscriptRecord } from "./transcript-tail.ts";
 import type { SteerViewTarget } from "./target-model.ts";
 import { createChildConversationAssembler, type ChildConversationAssembler } from "../child-conversation/assembler.ts";
@@ -47,10 +47,10 @@ function toSeedRecord(record: SteerTranscriptRecord): TranscriptSeedRecord {
  * renders through the SAME native child-conversation assembler the host-editor
  * widget uses (User/Assistant/ToolExecution/Custom/Bash components, settings
  * aware), so the degraded path never falls back to self-drawn message lines.
- * Steer, thinking-cycle, scroll, and Input behaviors are unchanged.
+ * There is no input surface — this is a read-only view. Esc/ctrl+c returns
+ * to the picker; shift+tab cycles thinking; PgUp/PgDn/Up/Down scroll.
  */
 export class SteerViewComponent implements Component, Focusable {
-	private readonly input = new Input();
 	private readonly assembler: ChildConversationAssembler;
 	private readonly settingsReader: ReturnType<typeof createViewerSettingsReader>;
 	private tail;
@@ -62,11 +62,9 @@ export class SteerViewComponent implements Component, Focusable {
 	private unseen = 0;
 	private notice = "";
 	private thinkingLevel = "";
-	private queuedSteer?: QueuedSteer;
 	private pendingActions = new Set<string>();
 	private disposed = false;
 	private _focused = false;
-	private inputFocused = true;
 	private readonly tui: TUI;
 	private readonly theme: Theme;
 	private readonly target: SteerViewTarget;
@@ -74,7 +72,7 @@ export class SteerViewComponent implements Component, Focusable {
 	private readonly options: SteerViewComponentOptions;
 
 	get focused(): boolean { return this._focused; }
-	set focused(value: boolean) { this._focused = value; this.input.focused = value && this.inputFocused; }
+	set focused(value: boolean) { this._focused = value; }
 
 	constructor(
 		tui: TUI,
@@ -100,8 +98,6 @@ export class SteerViewComponent implements Component, Focusable {
 			settings: this.settingsReader.read(),
 			toolOutputExpanded: this.readExpanded(),
 		});
-		this.input.onSubmit = (value) => this.submit(value);
-		this.input.onEscape = () => this.done({ kind: "picker" });
 		this.poll();
 		if (options.autoStart !== false) {
 			this.timer = (options.setInterval ?? setInterval)(() => this.poll(), options.pollIntervalMs ?? 250);
@@ -157,13 +153,6 @@ export class SteerViewComponent implements Component, Focusable {
 			if (this.records.length > 1000) this.records.splice(0, this.records.length - 1000);
 			if (wasFollowing) this.scrollOffset = 0;
 			else this.unseen += update.records.length;
-			if (this.queuedSteer && update.records.some((record) =>
-				record.recordType === "message" && record.role === "user"
-					&& record.ts >= this.queuedSteer!.ts
-					&& record.text?.includes(this.queuedSteer!.deliveryMarker))) {
-				this.notice = "✓ steer delivered";
-				this.queuedSteer = undefined;
-			}
 		}
 		for (const requestId of [...this.pendingActions]) {
 			const response = consumeTargetActionResponse(this.target, requestId);
@@ -187,23 +176,6 @@ export class SteerViewComponent implements Component, Focusable {
 		return this.target;
 	}
 
-	private submit(value: string): void {
-		const text = value.trim();
-		if (!text) return;
-		if (text.startsWith("/")) {
-			this.done({ kind: "slash", text });
-			return;
-		}
-		try {
-			this.queuedSteer = sendTargetSteer(this.currentTarget(), text);
-			this.notice = "Steer queued; applies at the next safe turn";
-			this.input.setValue("");
-		} catch (error) {
-			this.notice = error instanceof Error ? error.message : String(error);
-		}
-		this.tui.requestRender();
-	}
-
 	handleInput(data: string): void {
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			this.done({ kind: "picker" });
@@ -220,32 +192,24 @@ export class SteerViewComponent implements Component, Focusable {
 			this.tui.requestRender();
 			return;
 		}
-		if (matchesKey(data, "tab")) {
-			this.inputFocused = !this.inputFocused;
-			this.input.focused = this._focused && this.inputFocused;
-			this.tui.requestRender();
-			return;
-		}
-		const empty = this.input.getValue().length === 0;
-		if ((!this.inputFocused || empty) && (matchesKey(data, "pageup") || matchesKey(data, "up"))) {
+		if (matchesKey(data, "pageup") || matchesKey(data, "up")) {
 			this.scrollOffset += matchesKey(data, "pageup") ? 10 : 1;
 			this.tui.requestRender();
 			return;
 		}
-		if ((!this.inputFocused || empty) && (matchesKey(data, "pagedown") || matchesKey(data, "down"))) {
+		if (matchesKey(data, "pagedown") || matchesKey(data, "down")) {
 			this.scrollOffset = Math.max(0, this.scrollOffset - (matchesKey(data, "pagedown") ? 10 : 1));
 			if (this.scrollOffset === 0) this.unseen = 0;
 			this.tui.requestRender();
 			return;
 		}
-		if (this.inputFocused) this.input.handleInput(data);
 	}
 
 	render(width: number): string[] {
 		this.applySettingsPass();
 		const safeWidth = Math.max(1, width);
 		const header = `subagent: ${this.target.agent} · ${this.target.runId}:${this.target.index} · ${this.target.status} · continuity unavailable${this.thinkingLevel ? ` · thinking ${this.thinkingLevel}` : ""}`;
-		const footerRows = 3;
+		const footerRows = 2;
 		const available = Math.max(1, this.tui.terminal.rows - footerRows);
 		const rendered = this.assembler.container.render(safeWidth);
 		this.scrollOffset = Math.min(this.scrollOffset, Math.max(0, rendered.length - available));
@@ -256,13 +220,11 @@ export class SteerViewComponent implements Component, Focusable {
 		return [
 			truncateToWidth(this.theme.fg("accent", this.theme.bold(header)), safeWidth),
 			...body.map((line) => truncateToWidth(line, safeWidth)),
-			truncateToWidth(this.theme.fg("muted", notice || "Enter steer · shift+tab thinking · PgUp/PgDn scroll · Esc back"), safeWidth),
-			...this.input.render(safeWidth).map((line) => truncateToWidth(line, safeWidth)),
+			truncateToWidth(this.theme.fg("muted", notice || "read-only · shift+tab thinking · PgUp/PgDn scroll · Esc back"), safeWidth),
 		];
 	}
 
 	invalidate(): void {
-		this.input.invalidate();
 		this.assembler.container.invalidate();
 	}
 	dispose(): void {

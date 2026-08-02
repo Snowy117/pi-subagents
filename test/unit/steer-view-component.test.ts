@@ -7,7 +7,6 @@ import { visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { claimControlActionRequests, writeControlActionResponse } from "../../src/runs/shared/control-actions/channel.ts";
-import { consumeSteerRequestsFromDir, steerDeliveryMarker } from "../../src/runs/background/control-channel.ts";
 import { SteerViewComponent, type SteerViewResult } from "../../src/tui/steer-view/steer-view-component.ts";
 import type { SteerViewTarget } from "../../src/tui/steer-view/target-model.ts";
 
@@ -43,7 +42,7 @@ function harness(refreshTarget?: () => SteerViewTarget | undefined, getToolsExpa
 }
 
 describe("SteerViewComponent", () => {
-	it("propagates focus for IME and bounds every rendered line", () => {
+	it("propagates focus and bounds every rendered line", () => {
 		const { component } = harness();
 		component.focused = true;
 		assert.equal(component.focused, true);
@@ -51,28 +50,22 @@ describe("SteerViewComponent", () => {
 		component.dispose();
 	});
 
-	it("sends steer, reports queued, and confirms from transcript", () => {
-		const { component, target, transcriptPath } = harness();
-		for (const character of "guide") component.handleInput(character);
-		component.handleInput("\r");
-		const request = consumeSteerRequestsFromDir(target.steerInboxDir!)[0]!;
-		assert.equal(request.message, "guide");
-		assert.match(component.render(50).join("\n"), /Steer queued/);
-		fs.appendFileSync(transcriptPath, `${JSON.stringify({ recordType: "message", ts: Date.now() + 1, role: "user", text: "guide" })}\n`);
-		component.poll();
-		assert.match(component.render(50).join("\n"), /Steer queued/);
-		fs.appendFileSync(transcriptPath, `${JSON.stringify({ recordType: "message", ts: Date.now() + 2, role: "user", text: `guide\n${steerDeliveryMarker(request.id)}` })}\n`);
-		component.poll();
-		assert.match(component.render(50).join("\n"), /steer delivered/);
+	it("renders read-only surface with continuity-unavailable header and no input row", () => {
+		const { component } = harness();
+		const out = component.render(50).join("\n");
+		assert.match(out, /continuity/);
+		assert.match(out, /read-only/);
+		// No input prompt-style line in the rendered output.
+		assert.doesNotMatch(out, /[>] /);
 		component.dispose();
 	});
 
-	it("rejects direct foreground control after the live target disappears", () => {
-		const { component, target } = harness(() => undefined);
-		component.input.setValue("too late");
-		component.handleInput("\r");
-		assert.match(component.render(50).join("\n"), /no longer available/);
-		assert.equal(fs.existsSync(target.steerInboxDir!), false);
+	it("printable characters do nothing to the read-only surface", () => {
+		const { component } = harness();
+		const before = component.render(50).join("\n");
+		for (const character of "hello") component.handleInput(character);
+		const after = component.render(50).join("\n");
+		assert.equal(after, before);
 		component.dispose();
 	});
 
@@ -103,19 +96,13 @@ describe("SteerViewComponent", () => {
 		component.dispose();
 	});
 
-	it("supports scroll keys, Esc back, and slash close results", () => {
-		const first = harness();
-		first.component.handleInput("\x1b[5~");
-		first.component.handleInput("\x1b[6~");
-		first.component.handleInput("\x1b");
-		assert.deepEqual(first.results, [{ kind: "picker" }]);
-		first.component.dispose();
-
-		const second = harness();
-		for (const character of "/other-command") second.component.handleInput(character);
-		second.component.handleInput("\r");
-		assert.deepEqual(second.results, [{ kind: "slash", text: "/other-command" }]);
-		second.component.dispose();
+	it("supports scroll keys and Esc back", () => {
+		const { component, results } = harness();
+		component.handleInput("\x1b[5~");
+		component.handleInput("\x1b[6~");
+		component.handleInput("\x1b");
+		assert.deepEqual(results, [{ kind: "picker" }]);
+		component.dispose();
 	});
 
 	it("scrolls through a single Markdown message that wraps to many terminal rows", () => {

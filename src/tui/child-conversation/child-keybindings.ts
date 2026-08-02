@@ -2,21 +2,25 @@
  * Child-mode keybinding resolution for the 7 app-level actions the viewer
  * intercepts while child mode is active (R1b / Q5=A).
  *
- * The effective keys per action are the merge of pi's built-in defaults with
- * user overrides from `<agentDir>/keybindings.json` (with legacy-name
- * migration), exactly as the main agent reads them. Actions with empty
- * effective keys (user removed) are never intercepted.
+ * Resolution funnels through the SAME `KeybindingsManager` the main agent
+ * uses — the pi-tui global singleton from `getKeybindings()`, initialized by
+ * pi-coding-agent's InteractiveMode with the full KEYBINDINGS table, the user
+ * `<agentDir>/keybindings.json` (defaults / remaps / legacy-name migration /
+ * `[]` removal), and any extension prototype patches such as the leader-key
+ * plugin's pending-gated `matches`. Hand-written `matchesKey` loops are
+ * intentionally absent: a local reimplementation would drift from the main
+ * view (e.g. resolving `"leader+m"` as a bare `m` and swallowing typed
+ * letters), while the shared singleton is patched once for every consumer
+ * (editor, CustomEditor, this key route).
  *
- * Because `KeybindingsManager` is exported only as a compile-time type from
- * the package root, this small module reimplements the merge — it is stable
- * because the defaults and the legacy migration map are a small fixed contract
- * (see `dist/core/keybindings.js` in the pinned package).
+ * `CHILD_APP_DEFAULT_KEYS` is retained as the mirror table of the pi defaults
+ * for the 7 actions — used by tests and documentation, and as the fallback
+ * resolution source only when the global manager is unavailable (never
+ * crash).
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { matchesKey, type KeyId } from "@earendil-works/pi-tui";
-import { getAgentDir } from "../../shared/utils.ts";
+import { getKeybindings, matchesKey, type Keybinding, type KeybindingsManager, type KeyId } from "@earendil-works/pi-tui";
+import type * as fs from "node:fs";
 
 export type ChildAppAction =
 	| "interrupt"
@@ -37,7 +41,9 @@ export const CHILD_APP_DEFAULT_KEYS: Record<ChildAppAction, string[]> = {
 	"thinking.toggle": ["ctrl+t"],
 };
 
-const CHILD_APP_ACTION_IDS: Record<ChildAppAction, string> = {
+/** pi keybinding ids for the 7 child-mode actions (the `app.*` names from the
+ *  pi runtime's KEYBINDINGS table). */
+export const CHILD_APP_ACTION_IDS: Record<ChildAppAction, Keybinding> = {
 	interrupt: "app.interrupt",
 	"thinking.cycle": "app.thinking.cycle",
 	"model.cycleForward": "app.model.cycleForward",
@@ -47,53 +53,18 @@ const CHILD_APP_ACTION_IDS: Record<ChildAppAction, string> = {
 	"thinking.toggle": "app.thinking.toggle",
 };
 
-/** Legacy name → new name mapping (mirrors KEYBINDING_NAME_MIGRATIONS in the
- *  pi package for the 7 actions this module tracks). */
-const LEGACY_MIGRATION: Record<string, string> = {
-	interrupt: "app.interrupt",
-	cycleThinkingLevel: "app.thinking.cycle",
-	cycleModelForward: "app.model.cycleForward",
-	cycleModelBackward: "app.model.cycleBackward",
-	selectModel: "app.model.select",
-	expandTools: "app.tools.expand",
-	toggleThinking: "app.thinking.toggle",
-};
-
-/** Normalize a raw user-binding value to a string array, or undefined when
- *  the value is invalid (pi parity: invalid values are dropped and the action
- *  keeps its default). An explicit `[]` is a valid removal. */
-function normalizeKeys(value: unknown): string[] | undefined {
-	if (typeof value === "string") return [value];
-	if (Array.isArray(value) && value.every((item) => typeof item === "string")) return value as string[];
-	return undefined;
-}
-
-/** Read the raw keybindings.json, apply legacy-name migration (when both the
- *  legacy and the new name are present, legacy is skipped — pi parity), and
- *  return the migrated configuration as a Map (prototype-safe for hostile
- *  keys like `__proto__`). */
-function loadMigratedConfig(fsImpl: Pick<typeof fs, "existsSync" | "readFileSync">, agentDir: string): Map<string, unknown> {
-	const configPath = path.join(agentDir, "keybindings.json");
-	let raw: Record<string, unknown> = {};
-	try {
-		if (fsImpl.existsSync(configPath)) {
-			raw = JSON.parse(fsImpl.readFileSync(configPath, "utf-8")) as Record<string, unknown>;
-		}
-	} catch {
-		// Malformed file → ignore; defaults stay.
-		return new Map();
-	}
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return new Map();
-	const rawKeys = Object.keys(raw);
-	const migrated = new Map<string, unknown>();
-	for (const key of rawKeys) {
-		const legacyTarget = LEGACY_MIGRATION[key];
-		const isLegacy = legacyTarget !== undefined;
-		if (isLegacy && rawKeys.includes(legacyTarget)) continue;
-		migrated.set(legacyTarget ?? key, raw[key]);
-	}
-	return migrated;
-}
+/** Resolution order: interrupt first, then the rest (matches the main-agent
+ *  CustomEditor priority; no default-key overlaps exist — only user
+ *  conflicts, where the first matching action wins). */
+const CHILD_APP_ORDER: ChildAppAction[] = [
+	"interrupt",
+	"thinking.cycle",
+	"model.cycleForward",
+	"model.cycleBackward",
+	"model.select",
+	"tools.expand",
+	"thinking.toggle",
+];
 
 export interface ChildKeybindings {
 	/** Resolve a raw terminal input to the child action it maps to, or
@@ -105,65 +76,46 @@ export interface ChildKeybindings {
 }
 
 export interface ChildKeybindingsOptions {
+	/** Test injection: an isolated KeybindingsManager. When omitted, resolution
+	 *  uses the pi-tui global singleton (`getKeybindings()`) — the same
+	 *  instance the main agent's editor and CustomEditor resolve through. */
+	manager?: KeybindingsManager;
+	/** Accepted for source compatibility with the pre-manager implementation;
+	 *  unused by the manager-backed resolution (the manager owns loading and
+	 *  migration of `<agentDir>/keybindings.json`). */
 	agentDir?: string;
+	/** Accepted for source compatibility; unused by the manager-backed
+	 *  resolution. */
 	fs?: Pick<typeof fs, "existsSync" | "readFileSync">;
-	now?: () => number;
-	ttlMs?: number;
 }
 
 export function createChildKeybindings(options: ChildKeybindingsOptions = {}): ChildKeybindings {
-	const agentDir = options.agentDir ?? getAgentDir();
-	const fsImpl = options.fs ?? fs;
-	const now = options.now ?? Date.now;
-	const ttlMs = options.ttlMs ?? 30_000;
-	let cached: { at: number; keys: Map<string, string[]> } | undefined;
-
-	const load = (): Map<string, string[]> => {
-		const effective = new Map<string, string[]>();
-		for (const [action, keys] of Object.entries(CHILD_APP_DEFAULT_KEYS)) {
-			effective.set(CHILD_APP_ACTION_IDS[action as ChildAppAction], keys);
-		}
-		const migrated = loadMigratedConfig(fsImpl, agentDir);
-		for (const actionId of effective.keys()) {
-			if (migrated.has(actionId)) {
-				const userKeys = normalizeKeys(migrated.get(actionId));
-				if (userKeys === undefined) continue;
-				effective.set(actionId, userKeys);
-			}
-		}
-		return effective;
-	};
-
-	const ensureLoaded = (): Map<string, string[]> => {
-		if (cached && now() - cached.at < ttlMs) return cached.keys;
-		const keys = load();
-		cached = { at: now(), keys };
-		return keys;
-	};
-
-	const idToAction = new Map<string, ChildAppAction>();
-	for (const [action, id] of Object.entries(CHILD_APP_ACTION_IDS)) {
-		idToAction.set(id, action as ChildAppAction);
-	}
+	const manager = options.manager ?? getKeybindings();
+	const managerUsable = typeof manager?.matches === "function" && typeof manager?.getKeys === "function";
 
 	return {
 		actionForKey(data: string): ChildAppAction | undefined {
-			const keys = ensureLoaded();
-			for (const [actionId, keyList] of keys) {
-				if (keyList.length === 0) continue;
-				const action = idToAction.get(actionId);
-				if (!action) continue;
-				for (const key of keyList) {
+			if (managerUsable) {
+				for (const action of CHILD_APP_ORDER) {
+					if (manager.matches(data, CHILD_APP_ACTION_IDS[action])) return action;
+				}
+				return undefined;
+			}
+			// Fallback: no usable manager (never crash) — resolve the mirror table.
+			for (const action of CHILD_APP_ORDER) {
+				for (const key of CHILD_APP_DEFAULT_KEYS[action]) {
 					if (matchesKey(data, key as KeyId)) return action;
 				}
 			}
 			return undefined;
 		},
 		keysFor(action) {
-			return ensureLoaded().get(CHILD_APP_ACTION_IDS[action]) ?? [];
+			if (managerUsable) return manager.getKeys(CHILD_APP_ACTION_IDS[action]);
+			return [...CHILD_APP_DEFAULT_KEYS[action]];
 		},
 		clearCache() {
-			cached = undefined;
+			// No-op: the global manager is authoritative and live; pi owns
+			// loading and reloading keybindings.json.
 		},
 	};
 }

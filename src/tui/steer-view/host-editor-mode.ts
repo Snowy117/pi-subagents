@@ -67,6 +67,9 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 	let currentChannel: ChildConversationChannel | undefined;
 	let lastCtx: ExtensionContext | undefined;
 	let widgetMounted = false;
+	/** The TUI handle the conversation widget renders into; captured when the
+	 *  widget factory mounts, used to trigger streaming repaints (R1). */
+	let widgetTui: TUI | undefined;
 	let unsubscribeStdout: (() => void) | undefined;
 	let assembler: ChildConversationAssembler | undefined;
 	let settingsReader: ReturnType<typeof createViewerSettingsReader> | undefined;
@@ -104,6 +107,7 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 			statusLine: () => (currentTarget ? statusLine(currentTarget) : "subagent: (none)"),
 		});
 		ctx.ui.setWidget(HOST_EDITOR_WIDGET_KEY, (tui, theme) => {
+			widgetTui = tui;
 			const component = baseFactory(tui, theme);
 			const render = component.render;
 			component.render = (width: number) => {
@@ -117,6 +121,7 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 	const removeWidget = (ctx: ExtensionContext | undefined): void => {
 		if (!widgetMounted) return;
 		widgetMounted = false;
+		widgetTui = undefined;
 		if (ctx?.hasUI) {
 			try {
 				ctx.ui.setWidget(HOST_EDITOR_WIDGET_KEY, undefined);
@@ -142,8 +147,20 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 	const validateAndExecuteCommand = (name: string, args: string, streamingBehavior: InputEvent["streamingBehavior"]): Promise<boolean> =>
 		commandValidator?.validateAndExecute(name, args, streamingBehavior) ?? Promise.resolve(false);
 
+	/** Ask the TUI to repaint the conversation widget. The TUI coalesces render
+	 *  requests (~16ms) so calling per RPC line is cheap; a stale widget handle
+	 *  (teardown race) must never break the RPC feed. */
+	const requestRender = (): void => {
+		try {
+			widgetTui?.requestRender();
+		} catch {
+			// A stale widget handle (teardown race) must not break the RPC feed.
+		}
+	};
+
 	/** Feed raw RPC stdout lines: relay notify UI requests, everything else
-	 *  goes through the native assembler. */
+	 *  goes through the native assembler. Every parsed line is child activity,
+	 *  so each triggers a widget repaint (R1 streaming). */
 	const onRpcLine = (line: string): void => {
 		let record: { type?: string; method?: string; message?: string };
 		try {
@@ -153,10 +170,12 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 		}
 		if (record.type === "extension_ui_request" && record.method === "notify") {
 			notify?.(typeof record.message === "string" ? record.message : "Child notification", "info");
+			requestRender();
 			return;
 		}
 		if (record.type === "agent_settled") turnActive = false;
 		assembler?.addRpcLine(line);
+		requestRender();
 	};
 
 	const subscribeStdout = (channel: ChildConversationChannel): void => {
@@ -208,6 +227,7 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 		active = false;
 		const uiCtx = ctx ?? lastCtx;
 		removeWidget(uiCtx);
+		widgetTui = undefined;
 		unsubscribeStdout?.();
 		unsubscribeStdout = undefined;
 		if (uiCtx?.hasUI) {

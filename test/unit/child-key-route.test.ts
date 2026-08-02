@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
 import { describe, it } from "node:test";
 import { createChildKeybindings } from "../../src/tui/child-conversation/child-keybindings.ts";
 import { createChildKeyRoute } from "../../src/tui/steer-view/child-key-route.ts";
 import type { ChildConversationChannel } from "../../src/tui/child-conversation/channel.ts";
+import { makeChildKeybindingsManager } from "../support/child-keybindings.ts";
 
 const ESC = "\u001b";
 const CTRL_P = "\u0010";
@@ -74,17 +74,6 @@ function makeUi() {
 	};
 }
 
-function fakeKeybindingsFs(bindings: Record<string, string>): KeybindingsFs {
-	return {
-		existsSync() {
-			return true;
-		},
-		readFileSync() {
-			return JSON.stringify(bindings);
-		},
-	};
-}
-
 function makeRoute(overrides: { streaming?: boolean } = {}) {
 	const channel = makeChannel();
 	const ui = makeUi();
@@ -93,7 +82,7 @@ function makeRoute(overrides: { streaming?: boolean } = {}) {
 	let thinkingHidden = false;
 	// Isolated keybindings: never read the host machine's keybindings.json so
 	// tests are deterministic (the real file remaps ctrl+l/o/t on this box).
-	const keybindings = createChildKeybindings({ agentDir: "/fake/agent", fs: fakeKeybindingsFs({}) });
+	const keybindings = createChildKeybindings({ manager: makeChildKeybindingsManager() });
 	const route = createChildKeyRoute({
 		getActiveChannel: () => channel,
 		isStreaming: () => streaming,
@@ -159,7 +148,7 @@ describe("child key route", () => {
 	it("routes model.cycleBackward via get_state + get_available_models → set_model(prev)", async () => {
 		// shift+ctrl+p is not resolvable from legacy terminal bytes, so the
 		// route is exercised through an injected keybindings remap.
-		const keybindings = createChildKeybindings({ agentDir: "/fake/agent", fs: fakeKeybindingsFs({ "app.model.cycleBackward": "ctrl+n" }) });
+		const keybindings = createChildKeybindings({ manager: makeChildKeybindingsManager({ "app.model.cycleBackward": "ctrl+n" }) });
 		const channel = makeChannel();
 		const ui = makeUi();
 		const route = createChildKeyRoute({

@@ -115,7 +115,7 @@ function fakeCtx() {
 	};
 }
 
-function renderWidget(ctx: ReturnType<typeof fakeCtx>, width = 120): string[] {
+function renderWidget(ctx: ReturnType<typeof fakeCtx>, tui: unknown = null, width = 120): string[] {
 	const factory = ctx.widgets.get(HOST_EDITOR_WIDGET_KEY) as
 		| ((tui: unknown, theme: unknown) => { render(width: number): string[] })
 		| undefined;
@@ -124,7 +124,21 @@ function renderWidget(ctx: ReturnType<typeof fakeCtx>, width = 120): string[] {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	};
-	return factory(null, theme).render(width);
+	return factory(tui, theme).render(width);
+}
+
+/** Mock TUI that records `requestRender` calls so tests can assert the widget
+ *  repaint trigger without a real render loop. */
+function makeMockTui(): { requestRenderCalls: number; requestRender(): void } {
+	let requestRenderCalls = 0;
+	return {
+		get requestRenderCalls() {
+			return requestRenderCalls;
+		},
+		requestRender() {
+			requestRenderCalls++;
+		},
+	};
 }
 
 describe("host editor conversation mode", () => {
@@ -433,12 +447,67 @@ describe("host editor conversation mode", () => {
 		const mode = createHostEditorConversation({ resolveChildChannel: async () => undefined });
 		const ctx = fakeCtx();
 		mode.open(ctx as never, makeTarget(), makeChannel(resident));
+		resident.emitStdout(JSON.stringify({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Here is" }] } }) + "\n");
+		const midStream = renderWidget(ctx);
+		assert.ok(midStream.some((line) => line.includes("Here is")), "partial assistant text renders mid-stream");
+		resident.emitStdout(JSON.stringify({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "Here is the answer." }] } }) + "\n");
+		const afterUpdate = renderWidget(ctx);
+		assert.ok(afterUpdate.some((line) => line.includes("Here is the answer.")), "assistant text streams into the widget");
+		assert.notDeepEqual(afterUpdate, midStream, "the widget content changes as tokens arrive, without user input");
 		resident.emitStdout(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Here is the answer." }], stopReason: "stop" } }) + "\n");
-		const lines = renderWidget(ctx);
-		assert.ok(lines.some((line) => line.includes("Here is the answer.")), "assistant text streams into the widget");
+		const afterEnd = renderWidget(ctx);
+		assert.ok(afterEnd.some((line) => line.includes("Here is the answer.")), "finalized assistant message renders");
 		resident.emitStdout(JSON.stringify({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} }) + "\n");
 		const afterTool = renderWidget(ctx);
 		assert.ok(afterTool.some((line) => line.includes("read")), "tool events stream into the widget");
+		assert.notDeepEqual(afterTool, afterEnd, "tool events change the widget content");
+	});
+
+	it("requests a widget render for each streamed RPC line (R1 streaming trigger)", () => {
+		const resident = makeResident();
+		const mode = createHostEditorConversation({ resolveChildChannel: async () => undefined });
+		const ctx = fakeCtx();
+		mode.open(ctx as never, makeTarget(), makeChannel(resident));
+		const tui = makeMockTui();
+		renderWidget(ctx, tui); // mount the widget; the factory captures the tui handle
+		assert.equal(tui.requestRenderCalls, 0);
+		resident.emitStdout(JSON.stringify({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Hel" }] } }) + "\n");
+		assert.equal(tui.requestRenderCalls, 1);
+		resident.emitStdout(JSON.stringify({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "Hello" }] } }) + "\n");
+		assert.equal(tui.requestRenderCalls, 2);
+		resident.emitStdout(JSON.stringify({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} }) + "\n");
+		assert.equal(tui.requestRenderCalls, 3);
+		resident.emitStdout(JSON.stringify({ type: "tool_execution_update", toolCallId: "tool-1", partialResult: { content: [{ type: "text", text: "partial" }] } }) + "\n");
+		assert.equal(tui.requestRenderCalls, 4, "tool execution updates also repaint the widget");
+		const lines = renderWidget(ctx, tui);
+		assert.ok(lines.some((line) => line.includes("Hello")), "the streamed content is visible in the widget");
+	});
+
+	it("requests a render for response and extension_ui_request lines (R1)", () => {
+		const resident = makeResident();
+		const mode = createHostEditorConversation({ resolveChildChannel: async () => undefined });
+		const ctx = fakeCtx();
+		mode.open(ctx as never, makeTarget(), makeChannel(resident));
+		const tui = makeMockTui();
+		renderWidget(ctx, tui);
+		resident.emitStdout(JSON.stringify({ type: "response", id: "req-1", command: "get_commands", success: true, data: { commands: [] } }) + "\n");
+		assert.equal(tui.requestRenderCalls, 1, "plain response lines repaint the widget");
+		resident.emitStdout(JSON.stringify({ type: "extension_ui_request", method: "notify", message: "note" }) + "\n");
+		assert.equal(tui.requestRenderCalls, 2, "extension_ui_request notify lines repaint the widget");
+	});
+
+	it("stops requesting renders after close (R1 cleanup)", () => {
+		const resident = makeResident();
+		const mode = createHostEditorConversation({ resolveChildChannel: async () => undefined });
+		const ctx = fakeCtx();
+		mode.open(ctx as never, makeTarget(), makeChannel(resident));
+		const tui = makeMockTui();
+		renderWidget(ctx, tui);
+		resident.emitStdout(JSON.stringify({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "x" }] } }) + "\n");
+		assert.equal(tui.requestRenderCalls, 1);
+		mode.close(ctx as never);
+		resident.emitStdout(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "y" }], stopReason: "stop" } }) + "\n");
+		assert.equal(tui.requestRenderCalls, 1, "no renders after the mode closes");
 	});
 
 	it("does not duplicate the user's own echoed prompt in the strip", () => {

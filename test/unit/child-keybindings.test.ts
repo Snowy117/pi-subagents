@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
 import { describe, it } from "node:test";
+import { getKeybindings, setKeybindings, type KeybindingsManager } from "@earendil-works/pi-tui";
 import { createChildKeybindings, CHILD_APP_DEFAULT_KEYS } from "../../src/tui/child-conversation/child-keybindings.ts";
+import { makeChildKeybindingsManager } from "../support/child-keybindings.ts";
 
 const ESC = "\u001b";
 const CTRL_P = "\u0010";
@@ -10,28 +11,28 @@ const CTRL_M = "\u000d";
 const CTRL_L = "\u000c";
 const CTRL_O = "\u000f";
 const CTRL_T = "\u0014";
+const CTRL_G = "\u0007";
 const SHIFT_TAB = `${ESC}[Z`;
-
-type KeybindingsFs = Pick<typeof fs, "existsSync" | "readFileSync">;
-
-function fakeFs(files: Record<string, string>): KeybindingsFs {
-	return {
-		existsSync(filePath: string) {
-			return files[filePath] !== undefined;
-		},
-		readFileSync(filePath: string) {
-			const content = files[filePath];
-			if (content === undefined) throw new Error(`ENOENT: ${filePath}`);
-			return content;
-		},
-	};
-}
 
 const AGENT_DIR = "/fake/agent";
 const CONFIG = `${AGENT_DIR}/keybindings.json`;
 
+/** Read a fake keybindings.json the way pi's loadRawConfig does: missing or
+ *  malformed content yields no user bindings (defaults stay). */
+function readConfig(files: Record<string, string>): Record<string, unknown> {
+	const content = files[CONFIG];
+	if (content === undefined) return {};
+	try {
+		const parsed = JSON.parse(content) as unknown;
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+	} catch {
+		// Malformed file → defaults stay.
+	}
+	return {};
+}
+
 function makeBindings(files: Record<string, string> = {}) {
-	return createChildKeybindings({ agentDir: AGENT_DIR, fs: fakeFs(files) });
+	return createChildKeybindings({ manager: makeChildKeybindingsManager(readConfig(files)) });
 }
 
 describe("child keybindings", () => {
@@ -101,31 +102,20 @@ describe("child keybindings", () => {
 
 	it("reads multiple keys per action", () => {
 		const keybindings = makeBindings({ [CONFIG]: JSON.stringify({ "app.interrupt": ["escape", "ctrl+g"] }) });
-		assert.equal(keybindings.actionForKey("\u0007"), "interrupt", "ctrl+g resolves");
+		assert.equal(keybindings.actionForKey(CTRL_G), "interrupt", "ctrl+g resolves");
 		assert.equal(keybindings.actionForKey(ESC), "interrupt", "escape still resolves");
 	});
 
-	it("caches per TTL and re-reads after clearCache", () => {
-		let fileContents = JSON.stringify({ "app.model.select": "ctrl+n" });
-		let clock = 0;
-		const keybindings = createChildKeybindings({
-			agentDir: AGENT_DIR,
-			fs: {
-				existsSync: () => true,
-				readFileSync: () => fileContents,
-			},
-			now: () => clock,
-			ttlMs: 1000,
-		});
+	it("reflects manager changes live (clearCache is a no-op)", () => {
+		const manager = makeChildKeybindingsManager({ "app.model.select": "ctrl+n" });
+		const keybindings = createChildKeybindings({ manager });
 		assert.equal(keybindings.actionForKey(CTRL_N), "model.select");
-		fileContents = JSON.stringify({});
-		assert.equal(keybindings.actionForKey(CTRL_N), "model.select", "cache hit within TTL");
-		clock = 1001;
-		assert.equal(keybindings.actionForKey(CTRL_N), undefined, "TTL expiry re-reads the file");
-		clock = 2002;
-		fileContents = JSON.stringify({ "app.model.select": "ctrl+n" });
+		// The manager is authoritative and live: pi's reload path updates the
+		// user bindings and resolution changes immediately.
+		manager.setUserBindings({});
+		assert.equal(keybindings.actionForKey(CTRL_N), undefined, "manager change is visible immediately");
 		keybindings.clearCache();
-		assert.equal(keybindings.actionForKey(CTRL_N), "model.select", "clearCache forces a fresh read");
+		assert.equal(keybindings.actionForKey(CTRL_P), "model.cycleForward", "defaults still resolve after clearCache");
 	});
 
 	it("defaults are consistent with the published table", () => {
@@ -136,5 +126,41 @@ describe("child keybindings", () => {
 		assert.deepEqual(CHILD_APP_DEFAULT_KEYS["model.select"], ["ctrl+l"]);
 		assert.deepEqual(CHILD_APP_DEFAULT_KEYS["tools.expand"], ["ctrl+o"]);
 		assert.deepEqual(CHILD_APP_DEFAULT_KEYS["thinking.toggle"], ["ctrl+t"]);
+	});
+
+	it("does not resolve leader-bound actions from a bare key (leader-key parity)", () => {
+		const manager = makeChildKeybindingsManager({ "app.model.select": "leader+m" });
+		// Simulate the leader-key extension's prototype patch: `leader+<key>`
+		// bindings resolve only while the leader is pending; bare keys never do.
+		const originalMatches = manager.matches.bind(manager);
+		let pending = false;
+		manager.matches = (data: string, keybinding) => {
+			if (keybinding === "app.model.select") return pending && originalMatches(data, keybinding);
+			return originalMatches(data, keybinding);
+		};
+		const keybindings = createChildKeybindings({ manager });
+		assert.equal(keybindings.actionForKey("m"), undefined, "bare m does not open the model picker");
+		pending = true;
+		assert.equal(keybindings.actionForKey("m"), "model.select", "leader+m opens the model picker");
+	});
+
+	it("reads the global keybindings instance when no manager is injected", () => {
+		const original = getKeybindings();
+		try {
+			setKeybindings(makeChildKeybindingsManager({ "app.model.select": "ctrl+n" }));
+			const keybindings = createChildKeybindings();
+			assert.equal(keybindings.actionForKey(CTRL_N), "model.select", "actionForKey reads the global singleton");
+			assert.equal(keybindings.actionForKey(CTRL_P), "model.cycleForward");
+		} finally {
+			setKeybindings(original);
+		}
+	});
+
+	it("falls back to the default table when the manager lacks matches", () => {
+		const unusable = { matches: undefined, getKeys: undefined } as unknown as KeybindingsManager;
+		const keybindings = createChildKeybindings({ manager: unusable });
+		assert.equal(keybindings.actionForKey(CTRL_P), "model.cycleForward");
+		assert.equal(keybindings.actionForKey(CTRL_L), "model.select");
+		assert.deepEqual(keybindings.keysFor("interrupt"), ["escape"]);
 	});
 });

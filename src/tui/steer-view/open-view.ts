@@ -68,7 +68,7 @@ export function createSteerViewController(
 		// shows the transcript above the editor. Activation happens
 		// synchronously; open() observes hostEditor.active and exits. When no
 		// channel can be resolved (no resident, no bridge, no reopenable
-		// session) the custom overlay is the explicit degraded surface.
+		// session) the custom overlay is the read-only degraded surface.
 		if (options.hostEditor && (options.resolveChildChannel || options.getResidentChild)) {
 			// Re-selecting the active target is a no-op for host-editor mode.
 			if (options.hostEditor.active && options.hostEditor.targetKey === target.key) {
@@ -80,12 +80,13 @@ export function createSteerViewController(
 				options.hostEditor.close(ctx);
 			}
 			let channel: ChildConversationChannel | undefined;
+			let resolverFailed = false;
 			if (options.resolveChildChannel) {
 				try {
 					channel = await options.resolveChildChannel(ctx, target);
 				} catch {
-					// A resolver failure degrades to the overlay; it must not crash
-					// the picker flow.
+					// Resolver failure degrades to the read-only view below; never crash the picker.
+					resolverFailed = true;
 				}
 			} else {
 				// Backward-compatible pre-Phase-5 path: a caller that only wires
@@ -93,11 +94,46 @@ export function createSteerViewController(
 				const resident = options.getResidentChild?.(target);
 				channel = resident ? createLocalRpcChannel(resident) : undefined;
 			}
+			if (!channel || resolverFailed) {
+				// No conversation channel: never enter a chat surface (no self-drawn
+				// editor). With a transcript show the read-only view; without one
+				// notify and stay on the picker.
+				if (target.transcriptPath) {
+					return ctx.ui.custom<SteerViewResult>(
+						(tui: TUI, theme: Theme, _kb, done) => {
+							const component = new SteerViewComponent(tui, theme, withTrustedRoots(ctx, target), done, {
+								refreshTarget: () => {
+									const refreshed = listSteerViewTargets(_state, options).find((candidate) => candidate.key === target.key);
+									return refreshed ? withTrustedRoots(ctx, refreshed) : undefined;
+								},
+								cwd: ctx.cwd,
+								getToolsExpanded: () => {
+									try {
+										return ctx.ui.getToolsExpanded();
+									} catch {
+										// A stale UI context must not break the degraded surface.
+										return false;
+									}
+								},
+							});
+							closeCurrent = () => done({ kind: "picker" });
+							return component;
+						},
+						{ overlay: true, overlayOptions: FULL_OVERLAY },
+					);
+				}
+				ctx.ui.notify(
+					"Conversation continuity unavailable (no resident process, no persisted session, no transcript)",
+					"warning",
+				);
+				return { kind: "picker" };
+			}
 			if (options.hostEditor.open(ctx, target, channel)) {
 				ctx.ui.notify(`Conversation routed to ${target.agent} (child mode). Use /subagents exit to return.`, "info");
 				return { kind: "picker" };
 			}
 		}
+		// Fallback: no hostEditor configured — show the read-only overlay.
 		return ctx.ui.custom<SteerViewResult>(
 			(tui: TUI, theme: Theme, _kb, done) => {
 				const component = new SteerViewComponent(tui, theme, withTrustedRoots(ctx, target), done, {
@@ -110,7 +146,6 @@ export function createSteerViewController(
 						try {
 							return ctx.ui.getToolsExpanded();
 						} catch {
-							// A stale UI context must not break the degraded surface.
 							return false;
 						}
 					},

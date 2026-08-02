@@ -464,15 +464,33 @@ async-bridge-channel,bridge-relay-tail,child-commands}.ts`,
   Settings are read from `<agentDir>/settings.json` + `<cwd>/.pi/settings.json`
   (project wins, deep merge, 500ms TTL) because extensions have no settings
   accessor — the same file source the main view uses.
-- **Key routing** (`child-key-route.ts`): mode-gated `onTerminalInput` resolves
-  effective keys for the 7 app actions from the public default table merged
-  with `<agentDir>/keybindings.json` (legacy-name migration included; empty
-  binding = no interception) — never hard-code keys. Esc → `abort` only while
-  the child is streaming (locally tracked), else pass through (editor closes
-  autocomplete). Editing-level keys are never intercepted.
+- **Key routing** (`child-key-route.ts`): must resolve effective keys via the
+  **global `getKeybindings()` singleton** (`@earendil-works/pi-tui`), NOT
+  hand-written `matchesKey` loops. The global singleton carries the user's
+  `keybindings.json`, pi's default table, legacy migrations, and the
+  **leader-key extension's `matches` prototype patch** (gates `leader+<key>`
+  behind a pending state). A hand-written `matchesKey(data, "leader+m")`
+  matches the raw letter `m` and swallows it, diverging from the main agent.
+  Resolution order: `interrupt` first, then `app.*` actions. Esc → `abort`
+  only while streaming, else pass through. Editing-level keys are never
+  intercepted.
+- **Streaming render trigger**: `ctx.ui.requestRender?.()` is a no-op
+  (`ExtensionUIContext` has no `requestRender` method). The widget factory
+  receives `tui: TUI` (from `@earendil-works/pi-tui`) which has a public
+  `requestRender(force?)` method with ~16ms coalescing. The host-editor mode
+  MUST capture the `tui` reference from the widget factory and call
+  `tui.requestRender()` at the end of every `onRpcLine()` callback (both
+  notify and assembler branches). Clearing `widgetTui = undefined` on mode
+  close prevents stale renders.
 - **Full-height widget**: the widget renders exactly `W = rows − CHROME(≈11)`
   lines (recomputed per render), blank-padded, so the parent chat rolls into
   terminal scrollback; removing the widget restores the pre-mode viewport.
+- **Read-only degraded surface**: when no `ChildConversationChannel` can be
+  resolved (no resident, no bridge, no reopenable session), the overlay
+  (`SteerViewComponent`) renders as a **read-only transcript view** with NO
+  Input component. The header shows "continuity unavailable"; footer shows
+  "read-only · Esc back". Escape returns to the picker. Steer/thinking/scroll
+  controls remain available but the user cannot send new messages.
 
 ### Validation & Error Matrix
 
