@@ -201,7 +201,7 @@ Pi 0.82.1 or newer is required for the interactive view. While a foreground or b
 }
 ```
 
-The slash command is the reliable fallback when another plugin's terminal listener consumes `Down`. Selecting a child opens a full chat overlay without switching or replacing the main Pi session. The view works for both async and foreground children, including runs with transcript artifacts disabled; it refreshes finalized user, assistant, and tool events, rather than token-by-token deltas.
+The slash command is the reliable fallback when another plugin's terminal listener consumes `Down`. Selecting a child opens the child conversation — for any child the view can reach (see “Persistent children and direct conversation (Option B)” below): resident foreground process, runner-side bridge for a running async child, or a reopenable session file. The view works for both async and foreground children, including runs with transcript artifacts disabled; it refreshes finalized user, assistant, and tool events, rather than token-by-token deltas.
 
 | Key | Action |
 |-----|--------|
@@ -215,15 +215,27 @@ If you submit `/xxx` in the overlay, the overlay closes and `/xxx` is placed in 
 
 ### Persistent children and direct conversation (Option B)
 
-By default, foreground children are launched as persistent Pi RPC processes (`subagents.persistentChildren`, default `true`). The child completes its delegated task at `agent_settled`, but the process stays resident so you can keep conversing with it directly without routing follow-ups through the parent agent. When you select a completed child in `/subagents` and it still has a resident process, the full overlay chat is replaced by a host-editor routing mode: the real Pi editor (including Zentui wrappers, completion, history, multiline, paste, IME) stays mounted and focused, a read-only transcript widget appears above it, and ordinary submissions go to the child. The parent agent never sees those messages.
+By default, children are launched as persistent Pi RPC processes (`subagents.persistentChildren`, default `true`) that stay resident after `agent_settled`. Selecting a child in `/subagents` — foreground or async, running or finished — enters a host-editor conversation mode: the real Pi editor (including Zentui wrappers, completion, history, multiline, paste, IME) stays mounted and focused, a full-height widget shows the child, and ordinary submissions go to the child. The parent agent never sees those messages.
 
-- Ordinary text → sent to the selected child as an RPC prompt.
+Every child the view can reach is resolved by one function into the same conversation channel:
+
+| Child | Channel |
+| --- | --- |
+| Foreground resident RPC process | local channel over the child's stdin/stdout |
+| Foreground evicted child with a session file | guarded `--session` reopen (`--mode rpc --session <path>`), never two writers |
+| Async child still running | runner-side conversation bridge (prompts relayed over a file inbox, the child's stdout mirrored back); the runner keeps the conversed-with child resident |
+| Async child finished (complete/failed/paused) | after the runner process exits, a guarded `--session` reopen |
+| Nothing resolvable (e.g. `--no-session`) | degraded overlay: explicit “conversation continuity unavailable” header, read-only native transcript + steer controls |
+
+- Ordinary text → sent to the selected child as an RPC prompt (images forwarded).
 - `//name args` → executed as a slash command in the **child's** runtime (e.g. `//dcp` runs the child's DCP); single `/` and `!bash` stay parent-owned.
-- The transcript widget is seeded from the child's transcript and streams follow-up responses live, so the selected child's conversation stays visible while you type in the host editor.
-- While child mode is active, the footer status line shows `subagent: <agent> · <runId>:<index> · <status>`.
+- The widget fills the chat area (the parent conversation scrolls into the terminal scrollback); exiting restores the previous layout. The footer status line shows `subagent: <agent> · <runId>:<index> · <status>` while child mode is active.
+- If the child's channel ends (crash, eviction, failed run, timeout, runner exit), the view re-resolves it: a reopenable session swaps in seamlessly with the accumulated conversation preserved; otherwise child mode auto-closes and input routing returns to the parent.
 - `/subagents exit` (or `/subagents close`) returns editor input to the parent; the editor text and focus are untouched.
-- If the child's RPC process ends (crash, eviction, failed run, timeout), the widget closes and input routing returns to the parent automatically instead of silently dropping messages; the child's persisted session file is left intact.
-- Evicted children can be reopened: selecting a completed child with a session file spawns a fresh RPC process on that session (`--mode rpc --session <path>`), guarded so a session never has two writers.
+
+**Rendering parity.** The widget (and the degraded overlay) renders the transcript with the same native components as the main chat view: user and assistant messages, toolCall ↔ toolResult cards paired by call id, custom messages (unknown `customType`s render an explicit `(generic fallback)` label), and bash executions. Streaming follow-ups render live off the child's RPC event stream. Render settings follow the `settings.json` files Pi itself merges (global `<agentDir>/settings.json` + project settings, project wins): `hideThinkingBlock`, `outputPad`, `terminal.showImages` / `terminal.imageWidthCells`, and `markdown.codeBlockIndent`; tool expansion state uses the public `getToolsExpanded()` API. The thinking label defaults to `Thinking...` (best effort). Because the same module realm renders the child surface, prototype patches installed by plugins such as pi-tool-display and pi-zentui on `UserMessageComponent` apply to the child conversation too (opportunistic, not an API promise); per-tool renderers and custom-renderer registries stay private upstream, so tool cards render the honest generic component.
+
+**Operating the child like the main agent.** While child mode is active, app-level keys are intercepted and routed to the child instead of the main agent — `Esc` aborts the child's stream (only while it is streaming; otherwise it falls through to close autocomplete), `Shift+Tab` cycles its thinking level, `Ctrl+P` / `Shift+Ctrl+P` cycle its model forward/backward, `Ctrl+L` opens the model picker (viewer-rendered), `Ctrl+O` expands/collapses tool output, and `Ctrl+T` toggles hidden thinking. Bindings resolve from the built-in defaults merged with your `keybindings.json` remaps (per action; removed bindings are skipped). Editor-level keys (typing, history, multiline, paste, IME, completion, line editing) are never intercepted — the real editor handles them. While child mode is active these app keys operate the child, so the same keys cannot operate the main agent at the same time (by design); exiting restores main-agent semantics. Disable interception with `subagents.childKeyRoute: false`.
 
 Resident children are evicted gracefully (cancel dialogs → stdin EOF → persisted shutdown) on viewer close, target switch, parent-session shutdown, idle expiry, or when the resident cap is exceeded. Settings in `~/.pi/agent/extensions/subagent/config.json`:
 
@@ -235,11 +247,12 @@ Resident children are evicted gracefully (cancel dialogs → stdin EOF → persi
       "idleMs": 900000,
       "maxResidentChildren": 4
     }
-  }
+  },
+  "childKeyRoute": true
 }
 ```
 
-`idleMs` (default 15 minutes) is how long a settled child stays resident before eviction; `maxResidentChildren` (default 4) evicts the least-recently-active settled children first, never an active one. Set `persistentChildren: false` to restore the legacy one-shot json child launch for every run.Background runs keep working after control returns to you. Inspect active runs with `subagent({ action: "status" })`, or a specific run with `subagent({ action: "status", id: "..." })`. For a read-only fleet view across active foreground and background work, use `/subagents-fleet` or `subagent({ action: "status", view: "fleet" })`. To inspect what a background child is saying without hunting through artifact directories, tail its live transcript with `subagent({ action: "status", id: "...", view: "transcript" })`; add `index` for a specific child in a parallel or chain run.
+`idleMs` (default 15 minutes) is how long a settled child stays resident before eviction; `maxResidentChildren` (default 4) evicts the least-recently-active settled children first, never an active one — the child you are conversing with is always excluded. Set `persistentChildren: false` to restore the legacy one-shot json child launch for every run; the async conversation bridge follows `persistentChildren` (there is no separate toggle).Background runs keep working after control returns to you. Inspect active runs with `subagent({ action: "status" })`, or a specific run with `subagent({ action: "status", id: "..." })`. For a read-only fleet view across active foreground and background work, use `/subagents-fleet` or `subagent({ action: "status", view: "fleet" })`. To inspect what a background child is saying without hunting through artifact directories, tail its live transcript with `subagent({ action: "status", id: "...", view: "transcript" })`; add `index` for a specific child in a parallel or chain run.
 
 They also show a compact async widget and send completion notifications. Parallel background runs show per-agent progress instead of fake chain steps. Chains with parallel groups keep their grouped shape in progress and results, so failed or paused agents stay visible next to completed ones. When a child is explicitly allowed to fan out with `tools: subagent`, its nested runs appear under that parent child in the main status tree instead of being hidden inside the child process.
 
