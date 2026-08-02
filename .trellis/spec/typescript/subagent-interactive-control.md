@@ -405,3 +405,125 @@ if (!registry.has(key)) registry.register(reopen(target));
   resident key; a stale refresh resolving after a target switch never writes
   one child's command set into the active child's cache. Timeout/no-stdout
   results are not cached (a later `//name` re-requests).
+
+## Unified native child conversation (host editor + host rendering + async bridge)
+
+### Scope / Trigger
+
+Apply this contract whenever code touches the child conversation surface, the
+runner conversation bridge, the transport abstraction, or the child-mode key
+routing. Modules: `src/tui/child-conversation/*`,
+`src/tui/steer-view/{host-editor-mode,open-view,child-channel,child-key-route,
+async-bridge-channel,bridge-relay-tail,child-commands}.ts`,
+`src/runs/background/runner/conversation-bridge/*`,
+`src/extension/index.ts`, `src/extension/config.ts`.
+
+### Contracts
+
+- **Transport abstraction**: the viewer only knows `ChildConversationChannel`
+  `{key, write(record), onStdoutLine(cb), settled, closed, lastActivityAt,
+  touch, close(kind), exitCode?}`. Foreground = `LocalRpcChannel` (wraps
+  `PersistentRpcChild`), async running = `AsyncBridgeChannel` (file bridge),
+  async terminal = reopen → `LocalRpcChannel`. The ONLY sync/async branch
+  point is `resolveChildChannel(target)` in `child-channel.ts`; viewer,
+  assembler, and input routing have no async branch.
+- **Runner bridge protocol** (`asyncDir/conversation/<stepKey>.*`):
+  - stepKey = `${sanitize(stepIndex)}-${sanitize(agent)}`, sanitize `[^\w.-]→"_"`
+    (paths.ts is load-bearing; both sides resolve it with the same function).
+  - `requests.jsonl`: parent→runner `{id, ts, type, message?, streamingBehavior?,
+    images?}`; the runner forwards prompt/get_commands/abort/model/thinking
+    records VERBATIM to the child's RPC stdin **via writeLine (preserves the
+    caller's id — `write()` would overwrite it)**; ping answered locally with a
+    `pong` relay marker; viewer-hostile session mutations (new_session,
+    switch_session, fork, clone) are NOT forwardable.
+  - `stdout.jsonl`: runner mirrors every child stdout line + synthetic markers
+    (`child_ready`/`child_settled`/`child_closed`/`child_unavailable`/`pong`/
+    `relay_reset`); parent tails with a byte cursor (pre-seeded history never
+    re-delivered; `relay_reset` → resync from new EOF). Raw child lines are fed
+    verbatim to the same assembler parser as foreground RPC stdout.
+  - `<stepKey>.active`: parent heartbeat `{ts}` rewritten ~every 5s; runner TTL
+    30s. Fresh heartbeat ⇒ child is conversing: excluded from runner idle/cap
+    eviction, and at `finalizeRun` the runner lingers (≤10min) before closeAll.
+  - Parent clears heartbeats on viewer close / target switch / session shutdown
+    (`closeAllOpenAsyncBridgeChannels`).
+- **Reopen race guard**: the parent reopens a terminal async child's session
+  only after the runner pid is confirmed dead (`process.kill(pid,0)`→ESRCH,
+  bounded ≤5s); region-of-authority keeps single-writer per session across
+  processes (runner closes children → parent reopen).
+- **Channel swap**: when the active channel's `closed` fires, host-editor
+  re-resolves; success → the accumulated assembler conversation survives (same
+  instance; new channel's stdout feeds it; key-route re-subscribes by channel
+  instance; heartbeat restarts). A 2s swap-rate guard stops reopen-spawn loops.
+- **Native assembler** (`child-conversation/assembler.ts`): ports
+  `addMessageToChat`/`renderSessionItems` role selection; toolCall↔toolResult
+  paired by toolCallId; `toolDefinition` stays undefined (generic — the
+  effective registry is private); unknown customType gets a labeled generic
+  fallback; settings (hideThinkingBlock/outputPad/showImages/imageWidthCells/
+  codeBlockIndent/hiddenThinkingLabel + `getToolsExpanded()`) re-applied per
+  settings pass via `setExpanded`/`setOutputPad`/`setHideThinkingBlock`…
+  Settings are read from `<agentDir>/settings.json` + `<cwd>/.pi/settings.json`
+  (project wins, deep merge, 500ms TTL) because extensions have no settings
+  accessor — the same file source the main view uses.
+- **Key routing** (`child-key-route.ts`): mode-gated `onTerminalInput` resolves
+  effective keys for the 7 app actions from the public default table merged
+  with `<agentDir>/keybindings.json` (legacy-name migration included; empty
+  binding = no interception) — never hard-code keys. Esc → `abort` only while
+  the child is streaming (locally tracked), else pass through (editor closes
+  autocomplete). Editing-level keys are never intercepted.
+- **Full-height widget**: the widget renders exactly `W = rows − CHROME(≈11)`
+  lines (recomputed per render), blank-padded, so the parent chat rolls into
+  terminal scrollback; removing the widget restores the pre-mode viewport.
+
+### Validation & Error Matrix
+
+| Case | Behavior |
+| --- | --- |
+| Runner dies while a bridge conversation is open | relay/`closed` fires; re-resolve → reopen if terminal+session, else auto-close child mode with clear notice |
+| Relay truncated at cap | `relay_reset` marker; viewer resyncs from new EOF without duplicating the preserved tail |
+| Heartbeat stale (parent crash) | runner stops considering child conversing; next eviction/finalize closes it (10min linger cap) |
+| `--no-session` async child, run terminal | resolveChildChannel → undefined → degraded overlay (native-rendered, "continuity unavailable") |
+| User remaps/removes an app key | key resolution follows keybindings.json; removed keys silently skip interception |
+| Bridge request unknown type | ignored by the watcher (`REQUEST_TYPES` allowlist); child_unavailable when no resident |
+| Reopen while runner alive | resolver waits pid death; never a second session writer |
+
+### Wrong vs Correct
+
+```ts
+// Wrong: branch the viewer on async vs foreground.
+if (kind === "async") { /* different render path */ }
+
+// Wrong: readline over the relay (splits on U+2028/U+2029).
+readline.createInterface({ input: child.stdout });
+
+// Wrong: forward with write() — it overwrites id, breaking correlation.
+rpcWrite.write({ id: parentId, type: "prompt", ... });
+
+// Correct: one channel abstraction, resolved once.
+const channel = await resolveChildChannel(ctx, target, deps);
+channel.write({ type: "prompt", message: text, streamingBehavior, images });
+```
+
+```ts
+// Correct: the assembler receives the same raw records for foreground and
+// async — byte-fidelity from a single source at a time.
+channel.onStdoutLine((line) => assembler.addRpcLine(line));
+
+// Correct: re-resolve on channel death keeps the conversation.
+await channel.closed; const next = await resolveChildChannel(ctx, target, deps);
+if (next) { switchChannel(next); } else { closeWithNotice(); }
+
+// Correct: key routing follows the user's keymap.
+if (!keybindings.actionForKey(data)) return undefined;
+```
+
+### Tests Required
+
+- Unit: channel abstraction (write/id preservation, tail markers, heartbeat,
+  closed semantics), assembler (role selection, pairing, streaming flattening,
+  settings re-apply, fallbacks), child-keybindings (remap/remove matrix),
+  child-key-route (consume gating, idle-Esc pass-through), resolve matrix
+  (foreground resident/reopen, async boot race, terminal pid-death, no-session),
+  runner bridge (relay framing/cap/markers, requests round-trip, operational
+  commands allowlist, heartbeat expiry), reopen-swap guard.
+- Integration: conversation-bridge-roundtrip (real runner + mock child:
+  prompt → relayed response, heartbeat, child_closed).

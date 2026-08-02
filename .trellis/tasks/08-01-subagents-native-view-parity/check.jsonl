@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/typescript/index.md", "reason": "TypeScript layer spec entry point — quality check section used to verify the implementation."}
+{"file": ".trellis/spec/typescript/subagent-interactive-control.md", "reason": "Load-bearing contracts the implementation must not break: host-editor routing, registry invariants, control/steer channels, transcript lifecycle, eviction, single-writer guarantee."}
+{"file": ".trellis/spec/typescript/quality-guidelines.md", "reason": "Quality bar for the new channel/bridge/assembler code — review checklist."}
+{"file": ".trellis/spec/typescript/testing-guidelines.md", "reason": "Test conventions for the new unit/integration coverage (channel abstraction, assembler, bridge, key routing)."}
+{"file": ".trellis/spec/typescript/schema-and-type-safety.md", "reason": "Verify new record schemas (bridge protocol, channel records) and settings parsing types."}
+{"file": ".trellis/spec/typescript/cross-extension-contracts.md", "reason": "Verify widget coexistence and opportunistic prototype-patch boundaries are honored."}
+{"file": ".trellis/spec/typescript/error-and-io-guidelines.md", "reason": "Verify atomic file ops, tail readers, error handling in bridge/relay/settings code."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check for needless reimplementation; flag reuse of rpc-protocol/control-channel/transcript-tail/reopen-bridge."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer consistency of the runner-side bridge and parent-side channels."}
+{"file": ".trellis/tasks/08-01-subagents-native-view-parity/research/async-conversation-bridge.md", "reason": "Design facts to verify the bridge implementation against (file layout, heartbeat, linger, reopen guard)."}
+{"file": ".trellis/tasks/08-01-subagents-native-view-parity/research/native-renderer-reuse.md", "reason": "Verify assembler component usage, pairing, settings parity, generic fallbacks match the design."}
+{"file": ".trellis/tasks/08-01-subagents-native-view-parity/research/operate-child-like-agent.md", "reason": "Verify key-route implementation matches RPC command table and keybinding resolution."}

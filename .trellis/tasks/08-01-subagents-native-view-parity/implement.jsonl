@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/typescript/index.md", "reason": "TypeScript layer spec entry point — pre-development checklist and quality-check sections to follow while implementing."}
+{"file": ".trellis/spec/typescript/subagent-interactive-control.md", "reason": "Core load-bearing contract for RPC child registry, host-editor routing, control channels, transcript lifecycle, eviction, reopen — this task extends it (bridge, native assembler, key routing)."}
+{"file": ".trellis/spec/typescript/schema-and-type-safety.md", "reason": "Type safety and schema conventions for the new channel abstractions, bridge protocol records, and settings parsing."}
+{"file": ".trellis/spec/typescript/cross-extension-contracts.md", "reason": "Extension interoperability conventions; relevant for widget coexistence and prototype-patch inheritance boundaries."}
+{"file": ".trellis/spec/typescript/module-and-export-guidelines.md", "reason": "Module boundaries and export conventions for new modules (child-conversation/, bridge, channels)."}
+{"file": ".trellis/spec/typescript/error-and-io-guidelines.md", "reason": "File I/O (atomic appends, tailing), error handling conventions for the bridge relay/inbox and settings reads."}
+{"file": ".trellis/spec/typescript/directory-structure.md", "reason": "Where new modules belong (src/tui/child-conversation/, src/runs/background/runner/, src/tui/steer-view/)."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Guidance for reusing existing pieces (rpc-protocol, control-channel, transcript-tail, reopen-bridge) rather than reimplementing."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data flow discipline — the bridge spans runner process and parent extension."}
+{"file": ".trellis/tasks/08-01-subagents-native-view-parity/research/async-conversation-bridge.md", "reason": "Bridge design facts: runner process ownership, file transport layout, heartbeat/lifecycle, reopen race guard."}
+{"file": ".trellis/tasks/08-01-subagents-native-view-parity/research/native-renderer-reuse.md", "reason": "Native component signatures, renderSessionItems/addMessageToChat port, settings source, prototype-patch inheritance, generic fallback policy."}
+{"file": ".trellis/tasks/08-01-subagents-native-view-parity/research/operate-child-like-agent.md", "reason": "RPC commands (abort/cycle_model/set_model/get_available_models/cycle_thinking_level/get_state), keybinding table, plugin behavior, interception feasibility."}
