@@ -30,7 +30,7 @@ import { clearSlashSnapshots, restoreSlashFinalSnapshots } from "../slash/slash-
 import { resolveWaitToolConfig } from "../runs/background/wait.ts";
 import registerSubagentNotify from "../runs/background/notify.ts";
 import { PROMPT_RUNTIME_EXTENSION_PATH, SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/pi-args.ts";
-import { loadConfig, resolvePersistentChildConfig } from "./config.ts";
+import { loadConfig } from "./config.ts";
 import {
 	clearPendingForegroundControlNotices,
 	handleSubagentControlNotice,
@@ -78,13 +78,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(ASYNC_DIR);
 
 	const config = loadConfig();
-	// Product default: persistent RPC children are enabled unless the user
-	// explicitly disables them. Tests that build an executor from a bare
-	// `config: {}` keep the legacy json path because the field is absent there.
-	// The E2E harness sets PI_SUBAGENT_E2E_JSON_CHILD to exercise the json path.
-	if (config.persistentChildren === undefined && process.env.PI_SUBAGENT_E2E_JSON_CHILD !== "1") {
-		config.persistentChildren = { enabled: true };
-	}
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
@@ -177,18 +170,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		: undefined;
 
 	// Option B eviction loop: settle idle resident children and enforce the
-	// resident cap. Runs every minute; config changes take effect on next tick.
+	// resident cap. Runs every minute with the product defaults (15min idle,
+	// cap 4); all children are persistent RPC, so eviction is always on.
 	const evictionTimer = setInterval(() => {
-		// Re-read config each tick so idle/cap changes take effect without a
-		// parent restart (config file is reloaded by loadConfig below).
-		const current = resolvePersistentChildConfig(loadConfig());
-		if (current.enabled) {
-			// Never evict the child the user is actively conversing with.
-			const activeKey = hostEditorConversation.active ? hostEditorConversation.targetKey : undefined;
-			const activeResidentKey = activeKey ? activeKey.split(":").slice(1).join("/") : undefined;
-			void persistentChildRegistry.evictIdle(current.idleEvictionMs, { except: activeResidentKey });
-			void persistentChildRegistry.evictOverflow(current.maxResidentChildren, { except: activeResidentKey });
-		}
+		// Never evict the child the user is actively conversing with.
+		const activeKey = hostEditorConversation.active ? hostEditorConversation.targetKey : undefined;
+		const activeResidentKey = activeKey ? activeKey.split(":").slice(1).join("/") : undefined;
+		void persistentChildRegistry.evictIdle(15 * 60 * 1000, { except: activeResidentKey });
+		void persistentChildRegistry.evictOverflow(4, { except: activeResidentKey });
 	}, 60_000);
 	evictionTimer.unref?.();
 	const steerView = createSteerViewRuntime(state, config, {

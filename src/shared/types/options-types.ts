@@ -127,7 +127,12 @@ export interface ExtensionConfig {
 	/** Global cap on simultaneously-running subagent tasks within a single run. Defaults to 20. */
 	globalConcurrencyLimit?: number;
 	control?: ControlConfig;
-	/** Persistent RPC child lifecycle: enabled toggle + eviction settings (Option B). */
+	/**
+	 * @deprecated No-op since 08-02: all children are launched as persistent RPC
+	 * processes unconditionally. Kept only so legacy config files that still
+	 * carry a `persistentChildren` block (including `eviction`) load without
+	 * error; the values are ignored.
+	 */
 	persistentChildren?: boolean | {
 		enabled?: boolean;
 		eviction?: {

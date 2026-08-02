@@ -12,7 +12,6 @@ import { randomUUID } from "node:crypto";
 import { shouldForkAgent } from "./budget-resolution.ts";
 import { buildParallelModeError, buildParallelWorktreeTaskCwdError, resolveSingleRunOutputBaseDir } from "./parallel-helpers.ts";
 import { type ExecutionContextData, type ExecutorDeps } from "./types.ts";
-import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 
 
 export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
@@ -91,7 +90,6 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			...(task.acceptance !== undefined ? { acceptance: task.acceptance } : {}),
 		}));
 		return executeAsyncChain(id, {
-			persistentChildren: deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(deps.config).enabled,
 			chain: [{
 				parallel: parallelTasks,
 				concurrency: resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency),
@@ -139,7 +137,6 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
 		const modelOverride = resolveSubagentModelOverride((params.model as string | undefined) ?? a.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope, source: (params.model as string | undefined) ? "explicit" : "inherited" });
 		return executeAsyncSingle(id, {
-			persistentChildren: deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(deps.config).enabled,
 			agent: params.agent!,
 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			agentConfig: a,

@@ -88,6 +88,7 @@ export interface AsyncStatusPayload {
 export interface MockPiCallRecord {
 	args?: string[];
 	systemPrompts?: Array<{ mode?: string; path?: string; text?: string; error?: string }>;
+	rpcPrompts?: Array<{ id?: string; type?: string; message?: string }>;
 }
 
 export function mockAssistantMessage(text: string, stopReason: "stop" | "tool_use" = "stop") {
@@ -196,7 +197,7 @@ export async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Pr
 	return resultPath;
 }
 
-export async function waitForMockPiCall(mockPi: MockPi, index: number, timeoutMs = 30_000): Promise<{ args: string[]; systemPrompts: NonNullable<MockPiCallRecord["systemPrompts"]> }> {
+export async function waitForMockPiCall(mockPi: MockPi, index: number, timeoutMs = 30_000): Promise<{ args: string[]; systemPrompts: NonNullable<MockPiCallRecord["systemPrompts"]>; rpcPrompts: NonNullable<MockPiCallRecord["rpcPrompts"]> }> {
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
 		const callFile = fs.readdirSync(mockPi.dir)
@@ -206,7 +207,7 @@ export async function waitForMockPiCall(mockPi: MockPi, index: number, timeoutMs
 		if (callFile) {
 			const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as MockPiCallRecord;
 			assert.ok(Array.isArray(payload.args), "expected recorded args");
-			return { args: payload.args, systemPrompts: payload.systemPrompts ?? [] };
+			return { args: payload.args, systemPrompts: payload.systemPrompts ?? [], rpcPrompts: payload.rpcPrompts ?? [] };
 		}
 		if (Date.now() > deadline) assert.fail(`Timed out waiting for recorded mock pi call ${index}`);
 		await new Promise((resolve) => setTimeout(resolve, 100));

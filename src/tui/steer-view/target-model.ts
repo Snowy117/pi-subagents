@@ -116,6 +116,7 @@ function fromForeground(state: SubagentState): SteerViewTarget[] {
 			active: child.status === "running", updatedAt: child.updatedAt,
 			transcriptPath: child.transcriptPath, steerInboxDir: child.steerInboxDir,
 			actionControlDir: child.actionControlDir,
+			sessionFile: child.sessionFile,
 			trustedRoots: child.transcriptRoot ? [child.transcriptRoot] : [],
 		});
 	}

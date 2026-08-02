@@ -247,6 +247,9 @@ async function runRpc(response, args) {
 			if (entries.length === 0 && plainOutput !== undefined) {
 				await writeJsonlLine(defaultAssistantMessage(withAcceptanceReport(plainOutput, args)));
 			}
+			if (typeof response.keepAliveAfterFinalMessageMs === "number" && response.keepAliveAfterFinalMessageMs > 0) {
+				await new Promise((resolve) => setTimeout(resolve, response.keepAliveAfterFinalMessageMs));
+			}
 			await writeJsonlLine({ type: "agent_settled" });
 		} finally {
 			pending--;

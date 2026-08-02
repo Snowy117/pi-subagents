@@ -129,7 +129,6 @@ export async function runSingleStep(
 			ctx.registerTimeout,
 			ctx.timeoutMessage,
 			ctx.registerTurnBudgetAbort,
-			ctx.persistentChildren === true,
 			ctx.persistentChildRegistry,
 			task,
 			conversationRelay,

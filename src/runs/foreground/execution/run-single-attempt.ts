@@ -90,10 +90,9 @@ export async function runSingleAttempt(
 			options.onDetachedExit?.(detachedResult);
 		},
 	};
-	const persistent = options.persistentChildren === true;
 	const { args, env: sharedEnv, tempDir } = buildPiArgs({
-		baseArgs: persistent ? ["--mode", "rpc"] : ["--mode", "json", "-p"],
-		mode: persistent ? "rpc" : "json",
+		baseArgs: ["--mode", "rpc"],
+		mode: "rpc",
 		task,
 		sessionEnabled: shared.sessionEnabled,
 		sessionDir: options.sessionDir,
@@ -195,6 +194,7 @@ export async function runSingleAttempt(
 					? LIVE_TRANSCRIPTS_DIR
 					: options.artifactsDir,
 			} : {}),
+			...(options.sessionFile ? { sessionFile: options.sessionFile } : {}),
 			updatedAt: Date.now(),
 		});
 	}
@@ -226,7 +226,7 @@ export async function runSingleAttempt(
 			const proc = spawn(spawnSpec.command, spawnSpec.args, {
 				cwd: options.cwd ?? runtimeCwd,
 				env: spawnEnv,
-				stdio: persistent ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
+				stdio: ["pipe", "pipe", "pipe"],
 				windowsHide: true,
 			});
 			state.proc = proc;
@@ -247,10 +247,11 @@ export async function runSingleAttempt(
 			registerProcessHandlers(state);
 			registerSignalHandlers(state);
 
-			if (persistent && registry) {
-				// Option B: own the RPC JSONL write side, deliver the task over stdin,
-				// and register the resident child for later viewer turns. The process
-				// stays alive after agent_settled; eviction is the registry's job.
+			if (registry) {
+				// Persistent RPC process: own the JSONL write side, deliver the task
+				// over stdin, and register the resident child for later viewer turns.
+				// The process stays alive after agent_settled; eviction is the
+				// registry's job.
 				const rpcWrite = attachRpcProtocol(proc).write;
 				state.rpcWrite = rpcWrite;
 				const closed = new Promise<void>((closedResolve) => {
@@ -285,7 +286,7 @@ export async function runSingleAttempt(
 			// Decided 2026-07-31: a detached child's RPC process is terminated
 			// (abort + graceful shutdown), not handed off; continued conversation
 			// with a detached child is deferred. The registry entry must not leak.
-			if (persistent && registry) {
+			if (registry) {
 				const detached = registry.get(childKey);
 				if (detached) {
 					registry.unregister(childKey);
@@ -300,7 +301,7 @@ export async function runSingleAttempt(
 		// crashed before settle) has no conversational future: unregister and
 		// release the process so the viewer can never route into a dead child
 		// and the eviction timer never has to find a lingering entry.
-		if (persistent && registry) {
+		if (registry) {
 			const resident = registry.get(childKey);
 			if (resident) {
 				if (state.settled && finalized.exitCode === 0 && !finalized.error) {

@@ -7,7 +7,6 @@ import { getArtifactsDir } from "../../../shared/artifacts.ts";
 import { toModelInfo } from "../../../shared/model-info.ts";
 import { resolveCurrentSessionId } from "../../../shared/session-identity.ts";
 import { type ArtifactConfig, type Details, ASYNC_DIR, DEFAULT_ARTIFACT_CONFIG, RESULTS_DIR, checkSubagentDepth, resolveCurrentMaxSubagentDepth } from "../../../shared/types.ts";
-import { resolvePersistentChildConfig } from "../../../extension/config.ts";
 import { executeAsyncSingle, formatAsyncStartedMessage, isAsyncAvailable } from "../../background/async-execution.ts";
 import { buildRevivedAsyncTask, interruptLiveAsyncResumeTarget } from "../../background/async-resume.ts";
 import { type ResolvedSubagentRunId, resolveSubagentRunId } from "../../background/run-id-resolver.ts";
@@ -139,7 +138,6 @@ export async function resumeAsyncRun(input: {
 	const artifactsDir = getArtifactsDir(parentSessionFile, effectiveCwd);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const result = executeAsyncSingle(runId, {
-		persistentChildren: input.deps.config.persistentChildren === undefined ? undefined : resolvePersistentChildConfig(input.deps.config).enabled,
 		agent: target.agent,
 		task: buildRevivedAsyncTask(target, followUp),
 		agentConfig,

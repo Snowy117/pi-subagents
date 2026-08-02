@@ -78,11 +78,10 @@ export function buildStepPiArgs(
 	},
 ) {
 	const { candidate, effectiveStructuredOutput, sessionEnabled, sessionDir, task } = locals;
-	const persistent = ctx.persistentChildren === true;
 	return buildPiArgs({
 		parentSessionId: step.parentSessionId,
-		baseArgs: persistent ? ["--mode", "rpc"] : ["--mode", "json", "-p"],
-		mode: persistent ? "rpc" : "json",
+		baseArgs: ["--mode", "rpc"],
+		mode: "rpc",
 		task,
 		sessionEnabled,
 		sessionDir,

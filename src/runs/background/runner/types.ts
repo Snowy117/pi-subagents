@@ -54,8 +54,6 @@ export interface SubagentRunConfig {
 	toolBudget?: ResolvedToolBudget;
 	/** Global cap on simultaneously-running subagent tasks within this run. */
 	globalConcurrencyLimit?: number;
-	/** Launch steps as persistent Pi RPC processes (Option B). */
-	persistentChildren?: boolean;
 	/** Parent-side registry for resident RPC children. */
 	persistentChildRegistry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry;
 }
@@ -170,8 +168,6 @@ export interface SingleStepContext {
 	nestedRoute?: NestedRouteInfo;
 	onAttemptStart?: (attempt: { model?: string; thinking?: string }) => void;
 	onChildEvent?: (event: ChildEvent) => void;
-	/** Launch steps as persistent Pi RPC processes (Option B). */
-	persistentChildren?: boolean;
 	/** Parent-side registry for resident RPC children. */
 	persistentChildRegistry?: import("../../persistent/rpc-child-registry.ts").RpcChildRegistry;
 	/** Runner-side conversation bridge for this child's step (Phase 4). */

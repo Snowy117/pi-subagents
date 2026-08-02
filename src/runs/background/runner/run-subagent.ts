@@ -10,7 +10,6 @@ import { runParallelGroupStep } from "./runner-step-parallel.ts";
 import { runSequentialStep } from "./runner-step-sequential.ts";
 import { finalizeRun } from "./runner-finalize.ts";
 import { createRpcChildRegistry } from "../../persistent/rpc-child-registry.ts";
-import { loadConfig, resolvePersistentChildConfig } from "../../../extension/config.ts";
 import {
 	CONVERSATION_EVICTION_INTERVAL_MS,
 	createRunnerConversationBridge,
@@ -24,15 +23,10 @@ const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "S
 export async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const state = createRunnerState(config);
 	const ops = createRunnerOps(state);
-	// Option B: the runner process owns the registry of its resident RPC
-	// children; graceful close happens before the runner process exits.
-	const persistentChildRegistry = config.persistentChildren === true ? createRpcChildRegistry() : undefined;
-	if (persistentChildRegistry) {
-		config.persistentChildRegistry = persistentChildRegistry;
-	}
-	const conversationBridge: RunnerConversationBridge | undefined = persistentChildRegistry
-		? createRunnerConversationBridge({ asyncDir: state.asyncDir, registry: persistentChildRegistry })
-		: undefined;
+	// The runner owns the registry of its resident RPC children.
+	const persistentChildRegistry = createRpcChildRegistry();
+	config.persistentChildRegistry = persistentChildRegistry;
+	const conversationBridge = createRunnerConversationBridge({ asyncDir: state.asyncDir, registry: persistentChildRegistry });
 	state.conversationBridge = conversationBridge;
 	if (conversationBridge) {
 		// Best-effort shutdown hygiene: a dead runner must never leave stale
@@ -62,20 +56,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			else state.pendingStepSteers.push(request);
 		},
 	});
-	if (conversationBridge && persistentChildRegistry) {
-		// Runner-side eviction loop mirroring the parent extension: settled
-		// children idle > idleEvictionMs or beyond the cap are evicted, never
-		// a child with a fresh conversation heartbeat. Config is re-read each
-		// tick so idle/cap changes apply without a restart.
-		state.conversationEvictionTimer = setInterval(() => {
-			const current = resolvePersistentChildConfig(loadConfig());
-			if (!current.enabled) return;
-			const exceptKeys = conversationBridge.conversingRegistryKeys();
-			void persistentChildRegistry.evictIdle(current.idleEvictionMs, { except: exceptKeys });
-			void persistentChildRegistry.evictOverflow(current.maxResidentChildren, { except: exceptKeys });
-		}, CONVERSATION_EVICTION_INTERVAL_MS);
-		state.conversationEvictionTimer.unref?.();
-	}
+	// Eviction loop: settled children idle > 15min or beyond 4 are evicted.
+	state.conversationEvictionTimer = setInterval(() => {
+		const exceptKeys = conversationBridge.conversingRegistryKeys();
+		void persistentChildRegistry.evictIdle(15 * 60 * 1000, { except: exceptKeys });
+		void persistentChildRegistry.evictOverflow(4, { except: exceptKeys });
+	}, CONVERSATION_EVICTION_INTERVAL_MS);
+	state.conversationEvictionTimer.unref?.();
 	if (config.deadlineAt !== undefined) {
 		const remainingMs = Math.max(0, config.deadlineAt - Date.now());
 		state.timeoutTimer = setTimeout(() => ops.timeoutRunner(), remainingMs);

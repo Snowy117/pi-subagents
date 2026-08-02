@@ -92,7 +92,7 @@ describe("foreground persistent RPC child", { skip: !available ? "pi packages no
 		assert.equal(registry.has("rpc-run-3/0"), false);
 	});
 
-	it("legacy json mode still exits and never registers a resident child", async () => {
+	it("legacy persistentChildren:false is ignored — child is always RPC mode", async () => {
 		const registry = makeRegistry();
 		mockPi.onCall({ jsonl: [events.assistantMessage("done")] });
 		const agents = makeAgentConfigs(["echo"]);
@@ -104,8 +104,10 @@ describe("foreground persistent RPC child", { skip: !available ? "pi packages no
 		});
 
 		assert.equal(result.exitCode, 0);
-		assert.equal(registry.has("json-run-1/0"), false);
-		assert.equal(registry.entries().length, 0);
+		const resident = registry.get("json-run-1/0");
+		assert.ok(resident, "expected a resident registry entry — persistentChildren:false is now ignored, RPC mode is always used");
+		assert.equal(resident.settled, true);
+		await registry.closeAll("graceful");
 	});
 
 	it("executor injects persistentChildren from config with default true", async () => {

@@ -206,6 +206,7 @@ export interface ForegroundLiveChild {
 	actionControlDir: string;
 	transcriptPath?: string;
 	transcriptRoot?: string;
+	sessionFile?: string;
 	updatedAt: number;
 }
 

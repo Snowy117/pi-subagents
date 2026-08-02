@@ -244,7 +244,7 @@ describe("async execution utilities — background single execution", { skip: !a
 		assert.equal(run.details.asyncId, id);
 		const outputPath = path.join(outputBaseDir, "context.md");
 		const call = await waitForMockPiCall(mockPi, 0);
-		const taskArg = call.args.at(-1) ?? "";
+		const taskArg = call.rpcPrompts[0]?.message ?? "";
 		assert.match(taskArg, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(outputPath)}`));
 		const resultPath = await waitForAsyncResultFile(id);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
@@ -281,7 +281,7 @@ describe("async execution utilities — background single execution", { skip: !a
 
 		assert.equal(run.details.asyncId, id);
 		const call = await waitForMockPiCall(mockPi, 0);
-		const taskArg = call.args.at(-1) ?? "";
+		const taskArg = call.rpcPrompts[0]?.message ?? "";
 		const systemPrompt = call.systemPrompts[0]?.text ?? "";
 		assert.match(taskArg, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(outputPath)}`));
 		assert.match(systemPrompt, /Output format \(`default-report\.md`\):/);
