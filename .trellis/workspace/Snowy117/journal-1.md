@@ -347,3 +347,39 @@ Massive parameter cleanup: removed chain, acceptance, clarify, share, toolBudget
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Subagents native view parity: host editor + host rendering
+
+**Date**: 2026-08-02
+**Task**: Subagents native view parity: host editor + host rendering
+**Branch**: `main`
+
+### Summary
+
+Unified child conversation: full-height native-component assembler widget (user/assistant/toolCall↔toolResult/custom/bash, settings-faithful), host-editor routing for foreground AND async (runner conversation bridge: requests inbox + stdout relay + heartbeat linger), resolveChildChannel single sync/async branch point, child-mode app-key routing (Esc abort, model/thinking cycle+select, tools expand — follows keybindings.json), degraded overlay native-rendered, compile target 0.83.0. Unit 1113/1113; integration 0 new failures (122 baseline from archived simplify-subagent-params).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `902cd5b` | (see git log) |
+| `edc3fba` | (see git log) |
+| `f0347ff` | (see git log) |
+| `364a135` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

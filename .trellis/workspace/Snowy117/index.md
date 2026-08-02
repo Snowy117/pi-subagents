@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
-- **Last Active**: 2026-08-01
+- **Total Sessions**: 6
+- **Last Active**: 2026-08-02
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~349 | Active |
+| `journal-1.md` | ~385 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-08-02 | Subagents native view parity: host editor + host rendering | `902cd5b`, `edc3fba`, `f0347ff`, `364a135` | `main` |
 | 5 | 2026-08-01 | Simplify subagent params: remove chain, acceptance, clarify, share, budget/timeout/cwd overrides | `0be079a` | `main` |
 | 4 | 2026-07-31 | Interactive subagent control view | `49375e6`, `9a026c2` | `main` |
 | 3 | 2026-07-30 | Wake wait on blocking supervisor requests | `50cbf65`, `838ecc5`, `f12499c` | `main` |
