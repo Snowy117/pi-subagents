@@ -416,3 +416,12 @@ Fixed idle foreground parallel RPC children, restored immediate running tool ani
 ### Next Steps
 
 - None - task complete
+
+---
+
+## 2026-08-02 — simplify-subagent-experience archived
+
+- **Result**: Archived `08-02-simplify-subagent-experience` → `archive/2026-08/` (commit `8d70594`).
+- **Implementation commit**: `131bac8` `feat(subagents): simplify and unify subagent experience`.
+- **Verification**: `npm run test:unit` 1136/1136 pass; `npm run test:integration` 184/184 pass (one initial flaky failure, not reproduced on two reruns).
+- **Preserved**: unrelated `.pi/settings.json` worktree change left uncommitted per PRD constraint.
