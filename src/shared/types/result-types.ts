@@ -148,6 +148,7 @@ export interface SingleResult {
 	agent: string;
 	task: string;
 	exitCode: number;
+	skipped?: boolean;
 	detached?: boolean;
 	detachedReason?: string;
 	interrupted?: boolean;
@@ -162,6 +163,7 @@ export interface SingleResult {
 	model?: string;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
+	totalCost?: CostSummary;
 	controlEvents?: ControlEvent[];
 	error?: string;
 	sessionFile?: string;
@@ -191,6 +193,9 @@ export interface SingleResult {
 export interface Details {
 	mode: SubagentRunMode | "management";
 	runId?: string;
+	sessionId?: string;
+	sessionFile?: string;
+	cwd?: string;
 	context?: "fresh" | "fork";
 	results: SingleResult[];
 	controlEvents?: ControlEvent[];
@@ -200,7 +205,14 @@ export interface Details {
 	deadlineAt?: number;
 	timedOut?: boolean;
 	turnBudget?: ResolvedTurnBudget;
+	turnBudgetExceeded?: boolean;
+	wrapUpRequested?: boolean;
 	toolBudget?: ResolvedToolBudget;
+	toolBudgetBlocked?: boolean;
+	exitCode?: number;
+	timestamp?: number;
+	durationMs?: number;
+	nestedChildren?: NestedRunSummary[];
 	progress?: AgentProgress[];
 	progressSummary?: ProgressSummary;
 	artifacts?: {

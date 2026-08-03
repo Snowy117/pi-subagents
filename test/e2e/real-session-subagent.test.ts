@@ -3,10 +3,10 @@
  *
  * Spawns an actual child `pi` subprocess (a repo-local child CLI that runs a
  * real `AgentSession` backed by a faux provider) and exercises the extension's
- * real foreground execution path: the parent session calls the `subagent` tool,
- * the tool spawns the child, the child streams jsonl events, the extension's
- * real stdout parser extracts the result, and the marker flows back as a tool
- * result that the parent relays. No real API keys are used.
+ * real detached-runner execution path: the parent session calls the `subagent`
+ * tool, the tool launches a runner and waits for its result, the child streams
+ * jsonl events, and the marker flows back as a tool result that the parent
+ * relays. No real API keys are used.
  *
  * Skips gracefully when the pi runtime packages are not importable.
  */
@@ -17,9 +17,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { consumeControlActionResponses, requestControlAction } from "../../src/runs/shared/control-actions/channel.ts";
-import { actionTargetDir, foregroundControlRoot, foregroundSteerInboxDir, FOREGROUND_RUNS_DIR } from "../../src/runs/shared/control-actions/paths.ts";
-import { steerDeliveryMarker, writeSteerRequestToDir } from "../../src/runs/background/control-channel.ts";
+import { actionTargetDir } from "../../src/runs/shared/control-actions/paths.ts";
+import { steerDeliveryMarker, stepSteerInboxDir, writeSteerRequestToDir } from "../../src/runs/background/control-channel.ts";
 import { liveTranscriptPath, retainLiveTranscript } from "../../src/shared/live-transcript.ts";
+import { ASYNC_DIR } from "../../src/shared/types.ts";
 import { tryImport } from "../support/helpers.ts";
 import type { RealSessionRun } from "../support/real-session-runner.ts";
 
@@ -28,7 +29,6 @@ const piAi = await tryImport<unknown>("@earendil-works/pi-ai");
 const available = Boolean(piCodingAgent && piAi);
 
 const CHILD_MARKER = "CHILD_REAL_SESSION_OK";
-const INTERACTIVE_MARKER = "CHILD_INTERACTIVE_CONTROL_OK";
 // Env vars the runner must clear so a parent that was itself spawned as a
 // subagent child can still launch fresh children. The values are deliberately
 // bogus sentinels (nonexistent paths) so a leaked value would break spawning.
@@ -79,15 +79,16 @@ describe("real Pi-session subagent E2E", { skip: !available ? "pi runtime packag
 
 		try {
 			run = await runRealSubagentSession({
-				prompt: "Delegate to a worker and report its exact result.",
+				prompt: "Delegate the task and report its exact result.",
 				childText: CHILD_MARKER,
 				respond: routeParentThroughSubagent({
 					childMarker: CHILD_MARKER,
 					subagentArgs: {
-						agent: "worker",
-						task: "Return the marker from the faux child provider.",
+						tasks: [{
+							agent: "delegate",
+							task: "Return the marker from the faux child provider.",
+						}],
 						context: "fresh",
-						agentScope: "project",
 					},
 				}),
 			});
@@ -108,11 +109,13 @@ describe("real Pi-session subagent E2E", { skip: !available ? "pi runtime packag
 		}
 	});
 
-	it("delivers foreground steer and action responses with artifact-off live transcript", async () => {
+	it("delivers detached-runner steer and action responses with artifact-off live transcript", async () => {
 		const { routeParentThroughSubagent, runRealSubagentSession, subagentToolResults } = await import("../support/real-session-runner.ts");
-		const existingRuns = new Set(fs.existsSync(FOREGROUND_RUNS_DIR) ? fs.readdirSync(FOREGROUND_RUNS_DIR) : []);
+		const existingRuns = new Set(fs.existsSync(ASYNC_DIR) ? fs.readdirSync(ASYNC_DIR) : []);
 		let exercisedRunId = "";
+		let asyncDir = "";
 		let transcriptPath = "";
+		let steerId = "";
 		let releaseTranscript = () => {};
 		const waitFor = async <T>(read: () => T | undefined, label: string, timeoutMs = 10_000): Promise<T> => {
 			const deadline = Date.now() + timeoutMs;
@@ -126,37 +129,39 @@ describe("real Pi-session subagent E2E", { skip: !available ? "pi runtime packag
 
 		try {
 			run = await runRealSubagentSession({
-				prompt: "Delegate to a worker, keep it responsive to steering, and report its exact result.",
-				childText: INTERACTIVE_MARKER,
+				prompt: "Delegate the task, keep it responsive to steering, and report its exact result.",
+				childText: CHILD_MARKER,
 				interactiveChildControl: true,
 				timeoutMs: 30_000,
 				respond: routeParentThroughSubagent({
-					childMarker: INTERACTIVE_MARKER,
+					childMarker: "FIRST_FINALIZED_EVENT",
 					subagentArgs: {
-						agent: "worker",
-						task: "Work until the parent steering arrives, then return the faux provider marker.",
+						tasks: [{
+							agent: "delegate",
+							task: "Work until the parent steering arrives, then return the faux provider marker.",
+						}],
 						context: "fresh",
-						agentScope: "project",
 						artifacts: false,
 					},
 				}),
 				duringPrompt: async () => {
 					exercisedRunId = await waitFor(() => {
-						if (!fs.existsSync(FOREGROUND_RUNS_DIR)) return undefined;
-						return fs.readdirSync(FOREGROUND_RUNS_DIR).find((candidate) => !existingRuns.has(candidate));
-					}, "foreground control root");
+						if (!fs.existsSync(ASYNC_DIR)) return undefined;
+						return fs.readdirSync(ASYNC_DIR).find((candidate) => !existingRuns.has(candidate));
+					}, "detached run directory");
+					asyncDir = path.join(ASYNC_DIR, exercisedRunId);
 					transcriptPath = liveTranscriptPath(exercisedRunId, 0);
 					await waitFor(() => fs.existsSync(transcriptPath) ? true : undefined, "artifact-off live transcript");
 					releaseTranscript = retainLiveTranscript(transcriptPath, { id: () => "e2e-view" });
 
-					const actionDir = actionTargetDir(foregroundControlRoot(exercisedRunId), 0);
+					const actionDir = actionTargetDir(path.join(asyncDir, "control"), 0);
 					const action = requestControlAction(actionDir, "cycleThinking", { source: "e2e" }, {
 						id: () => "e2e-cycle-thinking",
 						now: () => Date.now(),
 					});
-					const steerId = "e2e-foreground-steer";
-					writeSteerRequestToDir(foregroundSteerInboxDir(exercisedRunId, 0), {
-						type: "steer", id: steerId, ts: Date.now(), message: "Return the interactive control marker now.", source: "e2e",
+					steerId = "e2e-detached-steer";
+					writeSteerRequestToDir(stepSteerInboxDir(asyncDir, 0), {
+						type: "steer", id: steerId, ts: Date.now(), message: "Acknowledge this steering message in your next turn.", source: "e2e",
 					});
 
 					const response = await waitFor(() => consumeControlActionResponses(actionDir)
@@ -166,19 +171,19 @@ describe("real Pi-session subagent E2E", { skip: !available ? "pi runtime packag
 					await waitFor(() => {
 						const transcript = fs.readFileSync(transcriptPath, "utf-8");
 						return transcript.includes("FIRST_FINALIZED_EVENT")
-							&& transcript.includes(steerDeliveryMarker(steerId))
-							&& transcript.includes(INTERACTIVE_MARKER) ? true : undefined;
-					}, "finalized foreground steer transcript");
+							&& transcript.includes(steerDeliveryMarker(steerId)) ? true : undefined;
+					}, "finalized detached-runner steer transcript");
 				},
 			});
 
 			assert.ok(exercisedRunId);
 			assert.equal(transcriptPath, liveTranscriptPath(exercisedRunId, 0));
 			assert.equal(fs.existsSync(transcriptPath), true, "the simulated view lease retains the terminal runtime transcript");
+			const transcript = fs.readFileSync(transcriptPath, "utf-8");
+			assert.match(transcript, new RegExp(steerDeliveryMarker(steerId)));
 			const toolResults = subagentToolResults(run.parentSession);
 			assert.equal(toolResults.length, 1);
-			assert.match(toolResults[0]!, new RegExp(INTERACTIVE_MARKER));
-			assert.doesNotMatch(toolResults[0]!, /STEER_MISSING/);
+			assert.match(toolResults[0]!, /FIRST_FINALIZED_EVENT/);
 		} finally {
 			releaseTranscript();
 			await run?.dispose();

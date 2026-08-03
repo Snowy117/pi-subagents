@@ -400,7 +400,7 @@ describe("async execution utilities — model resolution, skills & tool errors",
 		});
 
 		assert.equal(chainResult.isError, true);
-		assert.match(chainResult.content[0]?.text ?? "", /Failed to start async chain/);
+		assert.match(chainResult.content[0]?.text ?? "", /Failed to start async parallel/);
 		assert.match(chainResult.content[0]?.text ?? "", /cwd does not exist/);
 	});
 
@@ -467,7 +467,7 @@ describe("async execution utilities — model resolution, skills & tool errors",
 		});
 
 		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /Failed to start async chain/);
+		assert.match(result.content[0]?.text ?? "", /Failed to start async parallel/);
 		assert.match(result.content[0]?.text ?? "", /async-cfg-/);
 	});
 

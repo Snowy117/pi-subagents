@@ -6,9 +6,12 @@ import { type SubagentParamsLike } from "./types.ts";
 
 
 export function inferExecutionMode(params: SubagentParamsLike): SubagentRunMode {
-	if ((params.chain?.length ?? 0) > 0) return "chain";
-	if ((params.tasks?.length ?? 0) > 0) return "parallel";
+	if ((params.tasks?.length ?? 0) > 1) return "parallel";
 	return "single";
+}
+
+export function modeForConcreteInvocationCount(count: number): "single" | "parallel" {
+	return count > 1 ? "parallel" : "single";
 }
 
 
@@ -21,20 +24,4 @@ export function duplicateSubagentCallResult(params: SubagentParamsLike): AgentTo
 		isError: true,
 		details: { mode: inferExecutionMode(params), results: [] },
 	};
-}
-
-
-export function omitExecutionModeActionAlias(params: SubagentParamsLike): SubagentParamsLike {
-	const action = params.action?.toLowerCase();
-	if (action === "single" && (params.agent !== undefined || params.task !== undefined)) {
-		const rest = { ...params };
-		delete rest.action;
-		return rest;
-	}
-	if ((action === "parallel" || action === "tasks") && (params.tasks?.length ?? 0) > 0) {
-		const rest = { ...params };
-		delete rest.action;
-		return rest;
-	}
-	return params;
 }

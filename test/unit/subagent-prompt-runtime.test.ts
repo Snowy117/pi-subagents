@@ -136,21 +136,23 @@ describe("subagent prompt runtime", () => {
 		try {
 			const inbox = path.join(dir, "steer");
 			process.env[SUBAGENT_STEER_INBOX_ENV] = inbox;
-			const handlers = new Map<string, (payload?: unknown) => unknown>();
+			const handlers = new Map<string, Array<(payload?: unknown, ctx?: { model?: unknown }) => unknown>>();
 			const sent: Array<{ content: string; options: { deliverAs: string } }> = [];
 
 			registerSubagentPromptRuntime({
-				on(event: string, handler: (payload?: unknown) => unknown) {
-					handlers.set(event, handler);
+				on(event: string, handler: (payload?: unknown, ctx?: { model?: unknown }) => unknown) {
+					const listeners = handlers.get(event) ?? [];
+					listeners.push(handler);
+					handlers.set(event, listeners);
 				},
 				sendUserMessage(content: string, options: { deliverAs: string }) {
 					sent.push({ content, options });
 				},
-			} as { on(event: string, handler: (payload?: unknown) => unknown): void; sendUserMessage(content: string, options: { deliverAs: string }): void });
+			} as { on(event: string, handler: (payload?: unknown, ctx?: { model?: unknown }) => unknown): void; sendUserMessage(content: string, options: { deliverAs: string }): void });
 
 			writeSteerRequestToDir(inbox, { type: "steer", id: "steer-1", ts: 1, message: "Focus on tests." });
-			handlers.get("message_start")?.({});
-			handlers.get("session_shutdown")?.({});
+			for (const handler of handlers.get("message_start") ?? []) handler({}, { model: undefined });
+			for (const handler of handlers.get("session_shutdown") ?? []) handler({});
 
 			assert.equal(sent.length, 1);
 			assert.equal(sent[0]?.options.deliverAs, "steer");

@@ -137,7 +137,7 @@ export function createHostEditorConversation(options: HostEditorModeOptions): Ho
 			const tail = createTranscriptTail(target.transcriptPath, { trustedRoots: trustedRootsForTarget(target) });
 			records.push(...tail.poll().records);
 		} else {
-			records.push(...readTranscriptFallback(target, 80).records);
+			records.push(...readTranscriptFallback(target, Number.POSITIVE_INFINITY).records);
 		}
 		assemblerTarget.seedTranscriptRecords(records);
 	};

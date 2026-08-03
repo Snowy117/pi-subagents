@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
+import { createCompletionBroker } from "../../src/runs/background/completion-broker.ts";
 import { createNestedRoute, writeNestedEvent } from "../../src/runs/shared/nested-events.ts";
 import type { SubagentState } from "../../src/shared/types.ts";
 
@@ -29,6 +30,92 @@ function createState(): SubagentState {
 }
 
 describe("result watcher delivery and polling fallback", () => {
+	it("keeps synchronous ownership until delayed intercom delivery and completion notification finish", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-sync-owner-"));
+		try {
+			const emitted: Array<{ event: string; data: unknown }> = [];
+			const listeners = new Map<string, Set<(payload: unknown) => void>>();
+			let deliveryRequestId: string | undefined;
+			const pi = {
+				events: {
+					on(event: string, handler: (payload: unknown) => void) {
+						const eventListeners = listeners.get(event) ?? new Set();
+						eventListeners.add(handler);
+						listeners.set(event, eventListeners);
+						return () => eventListeners.delete(handler);
+					},
+					emit(event: string, data: unknown) {
+						emitted.push({ event, data });
+						for (const handler of listeners.get(event) ?? []) handler(data);
+						if (event === "subagent:result-intercom" && data && typeof data === "object") {
+							const requestId = (data as { requestId?: unknown }).requestId;
+							if (typeof requestId === "string") deliveryRequestId = requestId;
+						}
+					},
+				},
+			};
+			const state = createState();
+			state.currentSessionId = "session-1";
+			state.completionBroker = createCompletionBroker();
+			state.completionBroker.claim({ runId: "sync-run", sessionId: "session-1", mode: "single", tasks: [{ agent: "delegate", task: "work" }] });
+			const watcher = createResultWatcher(pi, state, resultsDir, 60_000);
+			const resultPath = path.join(resultsDir, "sync-run.json");
+			try {
+				fs.writeFileSync(resultPath, JSON.stringify({
+					id: "sync-run",
+					runId: "sync-run",
+					agent: "delegate",
+					mode: "single",
+					success: true,
+					state: "complete",
+					summary: "done",
+					timeoutMs: 1000,
+					deadlineAt: 2000,
+					turnBudget: { maxTurns: 4, graceTurns: 1, outcome: "within-budget", turnCount: 2 },
+					toolBudget: { hard: 3, block: "*", outcome: "within-budget", toolCount: 2 },
+					truncated: true,
+					asyncDir: "/runs/sync-run",
+					results: [{
+						agent: "delegate",
+						task: "work",
+						output: "done",
+						exitCode: 0,
+						success: true,
+						usage: { input: 3, output: 2, cacheRead: 1, cacheWrite: 0, cost: 0.1, turns: 2 },
+						totalCost: { inputTokens: 3, outputTokens: 2, costUsd: 0.1 },
+					}],
+					sessionId: "session-1",
+					intercomTarget: "subagent-chat-main",
+				}), "utf-8");
+				watcher.primeExistingResults();
+				const cached = await state.completionBroker.wait("sync-run");
+				assert.equal(cached?.runId, "sync-run");
+				assert.equal(cached?.data.asyncDir, "/runs/sync-run");
+				assert.equal(cached?.data.timeoutMs, 1000);
+				assert.equal(cached?.data.deadlineAt, 2000);
+				assert.equal(cached?.data.truncated, true);
+				assert.deepEqual((cached?.data.results as Array<{ usage?: unknown; totalCost?: unknown }> | undefined)?.[0]?.usage, { input: 3, output: 2, cacheRead: 1, cacheWrite: 0, cost: 0.1, turns: 2 });
+				assert.deepEqual((cached?.data.results as Array<{ usage?: unknown; totalCost?: unknown }> | undefined)?.[0]?.totalCost, { inputTokens: 3, outputTokens: 2, costUsd: 0.1 });
+				assert.equal(state.completionBroker.isOwned("sync-run", "session-1"), true);
+				assert.equal(emitted.some((entry) => entry.event === "subagent:async-complete"), false);
+				assert.equal(typeof deliveryRequestId, "string");
+
+				pi.events.emit("subagent:result-intercom-delivery", { requestId: deliveryRequestId, delivered: true });
+				for (let attempt = 0; attempt < 20 && !emitted.some((entry) => entry.event === "subagent:async-complete"); attempt++) {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+			} finally {
+				watcher.stopResultWatcher();
+			}
+
+			assert.equal(emitted.filter((entry) => entry.event === "subagent:async-complete").length, 1);
+			assert.equal(state.completionBroker.isOwned("sync-run", "session-1"), false);
+			assert.equal(fs.existsSync(resultPath), false);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
 	it("processes deferred session-scoped results after session identity is restored", async () => {
 		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-session-"));
 		try {

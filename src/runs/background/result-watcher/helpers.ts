@@ -1,5 +1,17 @@
 import * as fs from "node:fs";
-import type { NestedRunSummary } from "../../../shared/types.ts";
+import type {
+	ArtifactPaths,
+	ChainOutputMap,
+	CostSummary,
+	ModelAttempt,
+	NestedRunSummary,
+	SubagentRunMode,
+	TokenUsage,
+	ToolBudgetState,
+	TurnBudgetState,
+	Usage,
+	WorkflowGraphSnapshot,
+} from "../../../shared/types.ts";
 import { sanitizeSummary } from "../../shared/nested-events.ts";
 
 export const WATCHER_RESTART_DELAY_MS = 3000;
@@ -21,12 +33,38 @@ export type ResultWatcherDeps = {
 
 export type ResultFileChild = {
 	agent?: string;
+	task?: string;
 	output?: string;
+	summary?: string;
 	error?: string;
 	success?: boolean;
+	status?: string;
+	exitCode?: number | null;
+	usage?: Usage;
+	skipped?: boolean;
+	interrupted?: boolean;
+	timedOut?: boolean;
+	turnBudget?: TurnBudgetState;
+	turnBudgetExceeded?: boolean;
+	wrapUpRequested?: boolean;
+	toolBudget?: ToolBudgetState;
+	toolBudgetBlocked?: boolean;
 	sessionFile?: string;
-	artifactPaths?: { outputPath?: string };
+	sessionPath?: string;
+	model?: string;
+	attemptedModels?: string[];
+	modelAttempts?: ModelAttempt[];
+	totalCost?: CostSummary;
+	artifactPaths?: ArtifactPaths;
+	artifactPath?: string;
+	truncated?: boolean;
+	transcriptPath?: string;
+	transcriptError?: string;
+	structuredOutput?: unknown;
+	structuredOutputPath?: string;
+	structuredOutputSchemaPath?: string;
 	intercomTarget?: string;
+	index?: number;
 	children?: unknown;
 };
 
@@ -36,8 +74,17 @@ export type ResultFileData = {
 	agent?: string;
 	success?: boolean;
 	state?: string;
-	mode?: string;
+	mode?: SubagentRunMode;
 	summary?: string;
+	error?: string;
+	timeoutMs?: number;
+	deadlineAt?: number;
+	timedOut?: boolean;
+	turnBudget?: TurnBudgetState;
+	turnBudgetExceeded?: boolean;
+	wrapUpRequested?: boolean;
+	toolBudget?: ToolBudgetState;
+	toolBudgetBlocked?: boolean;
 	results?: ResultFileChild[];
 	nestedChildren?: unknown;
 	sessionId?: string;
@@ -45,6 +92,17 @@ export type ResultFileData = {
 	sessionFile?: string;
 	asyncDir?: string;
 	intercomTarget?: string;
+	outputs?: ChainOutputMap;
+	workflowGraph?: WorkflowGraphSnapshot;
+	exitCode?: number;
+	timestamp?: number;
+	durationMs?: number;
+	totalTokens?: TokenUsage;
+	totalCost?: CostSummary;
+	truncated?: boolean;
+	artifactsDir?: string;
+	taskIndex?: number;
+	totalTasks?: number;
 };
 
 export function sanitizeNestedResultChildren(value: unknown, resultPath: string, label: string): NestedRunSummary[] | undefined {

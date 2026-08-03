@@ -54,14 +54,14 @@ describe("child conversation widget", () => {
 		assert.ok(lines[0]!.includes("run-1:0"));
 	});
 
-	it("shows the tail of the conversation and rolls older lines out", () => {
+	it("contributes complete conversation history after viewport overflow", () => {
 		const { assembler, factory } = makeWidget({ fallbackRows: 20, chrome: 11 });
 		for (let index = 0; index < 12; index++) {
 			assembler.submitUserText(`message ${index}`);
 		}
 		const component = factory(null as never, fakeTheme);
 		const lines = component.render(120).join("\n");
-		assert.ok(!lines.includes("message 0"), "oldest item rolls off the visible tail");
+		assert.ok(lines.includes("message 0"), "oldest item remains in root output");
 		assert.ok(lines.includes("message 11"), "newest item stays visible");
 	});
 
@@ -71,7 +71,7 @@ describe("child conversation widget", () => {
 		const component = factory(tui as never, fakeTheme);
 		assert.equal(component.render(120).length, 29);
 		tui.terminal.rows = 25;
-		assert.equal(component.render(120).length, 14, "height follows the new terminal rows");
+		assert.equal(component.render(120).length, 14, "minimum height follows the new terminal rows");
 		tui.terminal.rows = 2;
 		assert.equal(component.render(120).length, 1, "never renders fewer than one line");
 	});

@@ -9,7 +9,7 @@ import * as path from "node:path";
 
 
 export function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState): { runId: string; mode: "single" | "parallel" | "chain"; state: "complete"; agent: string; index: number; intercomTarget: string; cwd: string; sessionFile: string } | undefined {
-	const requested = (params.id ?? params.runId)?.trim();
+	const requested = params.id?.trim();
 	if (!requested || !state.foregroundRuns?.size) return undefined;
 	const direct = state.foregroundRuns.get(requested);
 	const matches = direct ? [direct] : [...state.foregroundRuns.values()].filter((run) => run.runId.startsWith(requested));
@@ -57,7 +57,7 @@ export function isExactResumeError(error: unknown, source: "async" | "foreground
 
 
 export function resolveResumeTarget(params: SubagentParamsLike, state: SubagentState, options: { asyncRequireSessionFile?: boolean } = {}): ResumeSourceTarget {
-	const requested = (params.id ?? params.runId)?.trim() ?? "";
+	const requested = params.id?.trim() ?? "";
 	let foregroundTarget: ForegroundResumeSourceTarget | undefined;
 	let foregroundError: unknown;
 	let asyncTarget: AsyncResumeSourceTarget | undefined;
@@ -95,7 +95,7 @@ export function resolveResumeTarget(params: SubagentParamsLike, state: SubagentS
 	if (foregroundError && !isAsyncRunNotFound(asyncError)) throw foregroundError;
 	if (foregroundError) throw foregroundError;
 	if (asyncError) throw asyncError;
-	throw new Error("Run not found. Provide id or runId.");
+	throw new Error("Run not found. Provide id.");
 }
 
 

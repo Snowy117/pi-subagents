@@ -202,6 +202,9 @@ export async function runRealSubagentSession(options: RealSessionRunOptions): Pr
 		delete process.env.PI_SUBAGENT_PARENT_SESSION;
 		delete process.env.PI_SUBAGENT_PI_BINARY;
 		delete process.env.PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT;
+		const subagentConfigDir = path.join(home, "extensions", "subagent");
+		mkdirSync(subagentConfigDir, { recursive: true });
+		writeFileSync(path.join(subagentConfigDir, "config.json"), JSON.stringify({ intercomBridge: { mode: "off" } }));
 
 		const faux = fauxProvider({
 			provider: "faux-e2e-parent",

@@ -75,7 +75,7 @@ Do work
 		assert.equal(worker?.inheritSkills, false);
 	});
 
-	it("builtin agents inherit project context by default", () => {
+	it("the neutral delegate uses loader defaults for inherited project context", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-default-prompt-settings-"));
 		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-default-home-"));
 		tempDirs.push(dir);
@@ -88,11 +88,7 @@ Do work
 			process.env.USERPROFILE = homeDir;
 
 			const result = discoverAgents(dir, "both");
-			const scout = result.agents.find((agent) => agent.name === "scout");
-			const reviewer = result.agents.find((agent) => agent.name === "reviewer");
 			const delegate = result.agents.find((agent) => agent.name === "delegate");
-			assert.equal(scout?.inheritProjectContext, true);
-			assert.equal(reviewer?.inheritProjectContext, true);
 			assert.equal(delegate?.inheritProjectContext, true);
 		} finally {
 			if (previousHome === undefined) delete process.env.HOME;
@@ -102,7 +98,7 @@ Do work
 		}
 	});
 
-	it("bundled agents all have explicit tool allowlists", () => {
+	it("the neutral delegate omits an explicit tool allowlist", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-tools-"));
 		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-tools-home-"));
 		tempDirs.push(dir);
@@ -114,10 +110,8 @@ Do work
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
 			const builtins = discoverAgentsAll(dir).builtin;
-			assert.ok(builtins.length > 0);
-			for (const agent of builtins) {
-				assert.ok(agent.tools && agent.tools.length > 0, `${agent.name} should have explicit tools frontmatter`);
-			}
+			assert.deepEqual(builtins.map((agent) => agent.name), ["delegate"]);
+			assert.equal(builtins[0]?.tools, undefined);
 		} finally {
 			if (previousHome === undefined) delete process.env.HOME;
 			else process.env.HOME = previousHome;
@@ -126,7 +120,7 @@ Do work
 		}
 	});
 
-	it("worker and delegate include the child-facing supervisor tool", () => {
+	it("the neutral delegate omits specialized tool restrictions", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-supervisor-tool-"));
 		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-supervisor-tool-home-"));
 		tempDirs.push(dir);
@@ -138,11 +132,8 @@ Do work
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
 			const agents = discoverAgentsAll(dir).builtin;
-			for (const name of ["worker", "delegate"]) {
-				const agent = agents.find((candidate) => candidate.name === name);
-				assert.ok(agent, `${name} builtin should be discovered`);
-				assert.deepEqual(agent?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
-			}
+			assert.deepEqual(agents.map((agent) => agent.name), ["delegate"]);
+			assert.equal(agents[0]?.tools, undefined);
 		} finally {
 			if (previousHome === undefined) delete process.env.HOME;
 			else process.env.HOME = previousHome;

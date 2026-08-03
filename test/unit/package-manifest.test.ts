@@ -54,6 +54,15 @@ test("direct dependency declarations are exact version pins", () => {
 	}
 });
 
+test("published package contributes only the neutral delegate and no prompt templates", () => {
+	const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf-8"));
+	assert.deepEqual(packageJson.pi?.prompts, []);
+	assert.equal((packageJson.files as string[]).some((entry) => entry.includes("prompts")), false);
+	assert.deepEqual(fs.readdirSync(path.join(projectRoot, "agents")).sort(), ["delegate.md"]);
+	const promptDir = path.join(projectRoot, "prompts");
+	assert.equal(!fs.existsSync(promptDir) || fs.readdirSync(promptDir).length === 0, true);
+});
+
 test("old pi package scope is not used by source or tests", () => {
 	for (const file of [...collectTsFiles(path.join(projectRoot, "src")), ...collectTsFiles(path.join(projectRoot, "test"))]) {
 		const source = fs.readFileSync(file, "utf-8");

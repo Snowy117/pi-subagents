@@ -16,7 +16,7 @@ import {
 	SUBAGENT_PARENT_ROOT_RUN_ID_ENV,
 	SUBAGENT_PARENT_RUN_ID_ENV,
 } from "../../src/runs/shared/pi-args.ts";
-import { ASYNC_DIR, type SubagentState } from "../../src/shared/types.ts";
+import { ASYNC_DIR, RESULTS_DIR, TEMP_ROOT_DIR, type SubagentState } from "../../src/shared/types.ts";
 
 const routeRoots: string[] = [];
 const savedEnv = {
@@ -58,7 +58,13 @@ function createState(): SubagentState {
 	};
 }
 
-function createExecutor(state = createState(), agents: Array<Record<string, unknown>> = [], allowMutatingManagementActions = true, events: any = { emit() {}, on() { return () => {}; } }) {
+function createExecutor(
+	state = createState(),
+	agents: Array<Record<string, unknown>> = [],
+	allowMutatingManagementActions = true,
+	events: any = { emit() {}, on() { return () => {}; } },
+	waitLifecycleRoots?: { asyncDirRoot: string; resultsDir: string },
+) {
 	return createSubagentExecutor({
 		pi: { events, getSessionName() { return "parent"; } } as any,
 		state,
@@ -69,6 +75,7 @@ function createExecutor(state = createState(), agents: Array<Record<string, unkn
 		expandTilde: (value) => value,
 		discoverAgents: () => ({ agents: agents as any }),
 		allowMutatingManagementActions,
+		...(waitLifecycleRoots ? { waitLifecycleRoots } : {}),
 	});
 }
 
@@ -229,6 +236,75 @@ describe("nested control routing", () => {
 		}
 	});
 
+	it("rejects child-safe execution before launch or wait when no authorized nested lifecycle route exists", async () => {
+		for (const key of [
+			SUBAGENT_PARENT_EVENT_SINK_ENV,
+			SUBAGENT_PARENT_CONTROL_INBOX_ENV,
+			SUBAGENT_PARENT_ROOT_RUN_ID_ENV,
+			SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV,
+			SUBAGENT_PARENT_RUN_ID_ENV,
+			SUBAGENT_PARENT_CHILD_INDEX_ENV,
+		]) delete process.env[key];
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-child-execution-no-route-"));
+		try {
+			const execution = createExecutor(createState(), [{ name: "delegate", description: "Delegate" }], false)
+				.execute("run", { tasks: [{ agent: "delegate", task: "work" }] }, new AbortController().signal, undefined, ctx(root));
+			const result = await Promise.race([
+				execution,
+				new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 500)),
+			]);
+			assert.notEqual(result, "timed-out");
+			assert.equal(typeof result === "string" ? undefined : result.isError, true);
+			assert.match(typeof result === "string" ? result : text(result), /no authorized nested lifecycle root was resolved/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects global lifecycle roots for child-safe execution even with a valid inherited route", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-child-execution-global-roots-"));
+		const route = createNestedRoute("root-global-roots-rejected");
+		routeRoots.push(path.dirname(route.eventSink));
+		setNestedRouteEnv(route, route.rootRunId);
+		try {
+			const result = await createExecutor(
+				createState(),
+				[{ name: "delegate", description: "Delegate" }],
+				false,
+				undefined,
+				{ asyncDirRoot: ASYNC_DIR, resultsDir: RESULTS_DIR },
+			).execute("run", { tasks: [{ agent: "delegate", task: "work" }] }, new AbortController().signal, undefined, ctx(root));
+			assert.equal(result.isError, true);
+			assert.match(text(result), /authorized lifecycle roots do not match/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts the authorized nested lifecycle roots for valid fanout execution", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-child-execution-authorized-"));
+		const route = createNestedRoute("root-authorized-roots");
+		routeRoots.push(path.dirname(route.eventSink));
+		setNestedRouteEnv(route, route.rootRunId);
+		try {
+			const result = await createExecutor(
+				createState(),
+				[],
+				false,
+				undefined,
+				{
+					asyncDirRoot: path.join(TEMP_ROOT_DIR, "nested-subagent-runs", route.rootRunId),
+					resultsDir: path.join(RESULTS_DIR, "nested", route.rootRunId),
+				},
+			).execute("run", { tasks: [{ agent: "missing", task: "work" }] }, new AbortController().signal, undefined, ctx(root));
+			assert.equal(result.isError, true);
+			assert.doesNotMatch(text(result), /child-safe fanout mode/);
+			assert.match(text(result), /Unknown agent/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("does not let bare interrupt target hidden nested descendants", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-bare-interrupt-"));
 		try {
@@ -342,7 +418,7 @@ describe("nested control routing", () => {
 		}
 	});
 
-	it("emits a failed completed nested event when foreground execution throws after start", async () => {
+	it("does not emit a nested start event when detached launch preparation fails", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-foreground-throw-"));
 		try {
 			const route = createNestedRoute("root-parent");
@@ -359,9 +435,7 @@ describe("nested control routing", () => {
 			assert.equal(result.isError, true);
 			assert.match(text(result), /model registry exploded/);
 			const registry = projectNestedEvents(route);
-			assert.equal(registry.children.length, 1);
-			assert.equal(registry.children[0]?.state, "failed");
-			assert.match(registry.children[0]?.error ?? "", /model registry exploded/);
+			assert.equal(registry.children.length, 0);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -375,6 +449,7 @@ describe("nested control routing", () => {
 		process.env[SUBAGENT_FANOUT_CHILD_ENV] = "1";
 		const pi = {
 			events: { emit() {}, on() { return () => {}; } },
+			on() { return () => {}; },
 			registerTool() {},
 			getSessionName() { return "child"; },
 		} as any;
@@ -413,6 +488,7 @@ describe("nested control routing", () => {
 		process.env[SUBAGENT_FANOUT_CHILD_ENV] = "1";
 		const pi = {
 			events: { emit() {}, on() { return () => {}; } },
+			on() { return () => {}; },
 			registerTool() {},
 			getSessionName() { return "child"; },
 		} as any;
@@ -451,6 +527,7 @@ describe("nested control routing", () => {
 		process.env[SUBAGENT_FANOUT_CHILD_ENV] = "1";
 		const pi = {
 			events: { emit() {}, on() { return () => {}; } },
+			on() { return () => {}; },
 			registerTool() {},
 			getSessionName() { return "child"; },
 		} as any;

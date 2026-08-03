@@ -172,11 +172,12 @@ describe("SubagentParams schema", () => {
 		assert.equal(actionSchema.type, "string");
 		assert.equal(actionSchema.enum, undefined);
 		const description = String(actionSchema.description ?? "");
-		assert.match(description, /Management\/control action only/);
-		assert.match(description, /Must be omitted for execution mode/);
+		assert.match(description, /Management\/control action/);
+		assert.match(description, /action='wait'/);
+		assert.equal(SubagentParams?.properties?.all?.type, "boolean");
 	});
 
-	it("includes foreground timeout aliases and turn budget", () => {
+	it("omits removed timeout and budget dispatch fields", () => {
 		const timeoutSchema = SubagentParams?.properties?.timeoutMs;
 		const maxRuntimeSchema = SubagentParams?.properties?.maxRuntimeMs;
 		const turnBudgetSchema = SubagentParams?.properties?.turnBudget;
@@ -187,7 +188,7 @@ describe("SubagentParams schema", () => {
 		assert.equal(toolBudgetSchema, undefined, "toolBudget should be removed");
 	});
 
-	it("includes subagent control fields", () => {
+	it("uses id for control and keeps current status-view fields", () => {
 		const idSchema = SubagentParams?.properties?.id;
 		assert.ok(idSchema, "id schema should exist");
 		assert.equal(idSchema.type, "string");

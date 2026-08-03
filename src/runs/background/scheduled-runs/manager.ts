@@ -132,7 +132,7 @@ export class ScheduledRunManager {
 	}
 
 	private statusJob(params: SubagentParamsLike): AgentToolResult<Details> {
-		const requestedId = params.id ?? params.runId;
+		const requestedId = params.id;
 		if (!requestedId) return textResult("action='schedule-status' requires id.", true);
 		const job = resolveJobById(this.requireStore().list(), requestedId);
 		const lines = [
@@ -155,7 +155,7 @@ export class ScheduledRunManager {
 	}
 
 	private cancelJob(params: SubagentParamsLike): AgentToolResult<Details> {
-		const requestedId = params.id ?? params.runId;
+		const requestedId = params.id;
 		if (!requestedId) return textResult("action='schedule-cancel' requires id.", true);
 		const store = this.requireStore();
 		const job = resolveJobById(store.list(), requestedId);

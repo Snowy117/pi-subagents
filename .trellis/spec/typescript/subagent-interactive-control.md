@@ -1,29 +1,186 @@
 # Interactive Subagent Control Contracts
 
-> Executable contracts for parent-TUI control of headless Pi child processes.
-> These rules are load-bearing across the TUI, foreground/async execution,
-> filesystem control channels, and temporary transcript lifecycle.
+> Load-bearing contracts across `/subagents`, host-editor child chat, persistent RPC children, bridge/reopen routing, detached execution, waiting, and completion delivery.
 
-## Scenario: Interactive child chat and semantic control
+## 1. Scope
 
-### 1. Scope / Trigger
+Apply this specification whenever code changes:
 
-Apply this contract whenever code:
+- `/subagents` registration, picker entry, or child-view exit;
+- host-editor/native child transcript rendering;
+- parent-to-child semantic control;
+- persistent child process/session ownership;
+- foreground-resident, detached, bridge, or reopen channel selection;
+- active-run lifecycle, integrated waiting, or completion notification ownership;
+- temporary live-transcript retention and cleanup.
 
-- exposes a new parent-to-child control action;
-- changes foreground or async child control directories or environment wiring;
-- renders a live child transcript in the parent TUI;
-- changes `/subagents`, its Down-key entry, or the full-terminal child overlay;
-- changes temporary live-transcript retention or cleanup.
+The parent Pi session remains authoritative. A headless child is never treated as a literal nested TUI, and the parent never writes the child's session file.
 
-The child is a headless Pi process. Parent keyboard input must be translated to
-a semantic action; it must not be treated as a literal child TUI key event.
-The parent session remains authoritative and must never be replaced or attached
-to the child session file.
+## 2. Package entry surface
 
-### 2. Signatures
+### Slash/resources
 
-Control channel:
+- `/subagents` is the only package-provided slash command.
+- `/subagents exit` and `/subagents close` leave the child view through the shared teardown.
+- The package publishes no prompt templates and sets `pi.prompts` to `[]` so Pi does not convention-load a package-root `prompts/` directory.
+- User, project, and third-party commands/prompts are unaffected.
+
+### Picker entry
+
+There is no default picker key. In particular, Down arrow is never consumed by this package unless the user explicitly maps it.
+
+The optional package-owned keybinding is read from `<agentDir>/keybindings.json`:
+
+```json
+{
+  "subagents.openPicker": ["ctrl+down", "alt+s"]
+}
+```
+
+Contract:
+
+- accepted: one valid Pi `KeyId` string, an array containing only valid `KeyId` strings, or `[]`;
+- absent or invalid value: no binding;
+- a mixed valid/invalid array is invalid as a whole;
+- valid duplicates are removed;
+- no default and no fallback key;
+- one read when the extension runtime is constructed; Pi `/reload` reconstructs and rereads;
+- raw terminal matching uses `matchesKey` after strict grammar validation;
+- no promise of host conflict reporting, `/hotkeys` display, migrations, or leader-key prototype behavior.
+
+The picker handler consumes only when all gates pass:
+
+1. UI context exists;
+2. editor text is empty;
+3. a selectable child target exists;
+4. this package has no picker/degraded modal open;
+5. the terminal input matches one configured picker key.
+
+All other input returns unchanged.
+
+## 3. Shared child-view exit
+
+One idempotent teardown operation is used by:
+
+- `/subagents exit` and `/subagents close`;
+- the live canonical `app.exit` action while child mode/package modal is active and editor text is empty;
+- raw submission of exact trimmed `/quit` or legacy `/exit` while editable host-editor child mode is active.
+
+The teardown closes host-editor mode and any package modal through their normal close paths. Those paths remove widget/status state, dispose assembler/validators/subscriptions, release transcript/viewer leases, close viewer-side channels, and clear target/context references. It never exits the parent process.
+
+### Canonical exit action
+
+Resolve the global `getKeybindings()` singleton and call:
+
+```ts
+getKeybindings().matches(input, "app.exit")
+```
+
+Consume only when:
+
+- host-editor mode or a package picker/degraded modal is active;
+- `ctx.ui.getEditorText()` is empty;
+- the live manager matches `app.exit`.
+
+Non-empty editor input passes through so Pi retains normal delete-forward/editor behavior. Never hard-code Ctrl+D. The manager owns defaults, custom remaps, multiple keys, legacy migration, `[]` removal, live reload, and runtime patches.
+
+### `/quit` and `/exit` submit adapter
+
+Pi 0.83.0 handles `/quit` before normal extension input, so the package observes raw terminal submission:
+
+```ts
+getKeybindings().matches(input, "tui.input.submit")
+```
+
+Consume only when editable host-editor child mode is active and the exact trimmed editor text is `/quit` or `/exit`. Clear the editor before teardown so the parent cannot submit the stale text after mode closes.
+
+Read-only package modals do not claim slash submission. Pi's double-Ctrl+C emergency exit remains host-owned and is never reimplemented.
+
+### Terminal listener order
+
+Registration order is load-bearing:
+
+1. shared exit route (`app.exit`, then slash-submit adapter);
+2. optional configured picker route;
+3. child app-action route.
+
+Each stage returns a consumed result only when its complete contract matches.
+
+## 4. Host-editor native conversation
+
+The normal interactive child surface keeps Pi's real editor mounted and focused. Do not install a replacement `CustomEditor`, call `switchSession()`, call `newSession()`, or open the child session through `SessionManager`.
+
+### Render contract
+
+The widget renders:
+
+1. child status/header rows;
+2. the assembler's complete rendered history;
+3. blank padding only when the total output is shorter than `max(1, terminal.rows - chrome)`.
+
+Never apply a moving-tail slice such as:
+
+```ts
+content.slice(-availableRows)
+```
+
+and never clamp the final widget output to viewport height. The TUI root receives every child row; its bottom-anchored viewport shows recent rows while terminal scrollback retains older child rows. No package PageUp/PageDown history model is added to the editable host-editor path.
+
+The complete child transcript must not be contaminated with parent chat rows. Parent history may exist earlier in root scrollback, but the widget's history source contains child records only.
+
+### History seeding
+
+- Trusted persistent/live transcript files are read completely for host-editor seeding, incrementally where practical.
+- No semantic line or byte cap is allowed on this complete-history path.
+- Truncation, replacement, partial final line, malformed JSONL, and trusted-root escape are handled safely.
+- A complete trusted output/session fallback is read without the old arbitrary 80-line cap.
+- If the only source is inherently bounded `recentOutput`, seed what exists.
+- The degraded read-only fleet/transcript preview may retain its separate bounded-preview contract.
+
+### Native behavior
+
+The child assembler uses Pi's exported native components and main-view role selection:
+
+- user messages → native user component;
+- assistant messages/streaming → native assistant component;
+- tool calls/results paired by `toolCallId` → native tool execution component;
+- custom messages → registered renderer when available, labeled generic fallback otherwise;
+- bash executions → native bash component.
+
+Viewer settings are reapplied from `<agentDir>/settings.json` plus `<cwd>/.pi/settings.json` (project wins), including thinking visibility, output padding, images, image width, code indentation, hidden-thinking label, and host tool-expansion state.
+
+The widget factory captures the real `TUI`. Every live RPC line ends with `tui.requestRender()` through a lazy adapter. Never cast `ExtensionUIContext` to `TUI`; it does not implement `requestRender()`.
+
+### Host editor input
+
+While child mode is active:
+
+- ordinary submitted text routes as a child RPC `prompt`, preserving `streamingBehavior` and images;
+- `!bash` and a single `/` remain parent-owned;
+- `//name args` validates against child commands, then sends `/name args` only when supported;
+- unknown `//name` does not become a child LLM prompt;
+- a normal `/name` is parent-owned so Pi/third-party slash routing remains intact;
+- channel activity refreshes `lastActivityAt`.
+
+The real editor preserves autocomplete, multiline editing, paste, image handling, slash routing, custom keybindings, and extension editor wrappers.
+
+## 5. Child app-action routing
+
+The child action router resolves effective actions through the global keybinding manager, not handwritten key loops. This preserves user remaps/removals, legacy migrations, and leader-key manager patches.
+
+Routing rules:
+
+- interrupt is checked before other child app actions;
+- Escape/interrupt sends child `abort` only while the child is streaming, otherwise passes through;
+- thinking cycle, model cycle/select, tool expansion, and thinking visibility operate on child/view state while child mode is active;
+- editing-level keys are never intercepted;
+- action feedback updates the child status/renderer through the current channel and real TUI.
+
+The package-owned picker binding is the sole exception because `subagents.openPicker` is unknown to Pi's runtime action table and therefore requires strict raw matching.
+
+## 6. Semantic control channel
+
+### Signatures
 
 ```ts
 requestControlAction(
@@ -44,7 +201,159 @@ registerControlActionInbox(
 ): void;
 ```
 
-Live transcript:
+### Request/response schemas
+
+```ts
+interface ChildControlActionRequest {
+  version: 1;
+  type: "action";
+  id: string;
+  ts: number;
+  action: string;
+  payload?: unknown;
+  source?: string;
+}
+
+interface ChildControlActionResponse {
+  version: 1;
+  type: "action_response";
+  requestId: string;
+  ts: number;
+  status: "applied" | "rejected";
+  action: string;
+  result?: unknown;
+  error?: string;
+}
+```
+
+Requests require non-empty unique IDs/actions and finite non-negative timestamps. Applied responses may contain `result` but no `error`; rejected responses require `error` and contain no `result`. Extra schema keys or invariant violations are rejected.
+
+Directory contract:
+
+```text
+<run>/control/
+├─ steer-targets/<index>/
+└─ action-targets/<index>/
+   ├─ requests/
+   └─ responses/
+```
+
+- `PI_SUBAGENT_STEER_INBOX` points to the steer inbox.
+- `PI_SUBAGENT_ACTION_CONTROL_DIR` points to the action target directory.
+- Never write action files into the steer inbox.
+- Writes are atomic; consumers atomically claim before parsing/applying.
+- Replayed request IDs preserve one authoritative response and never reapply non-idempotent actions.
+
+`cycleThinking` derives supported levels from the child model and compatibility layer, uses public `getThinkingLevel()`/`setThinkingLevel()`, and returns the actual post-set level. Missing/non-reasoning models, invalid payload, unknown action, or exception produce one useful rejected response.
+
+## 7. Persistent RPC child contract
+
+Every execution child is a persistent Pi RPC process:
+
+```ts
+buildPiArgs({ mode: "rpc" }); // --mode rpc, no -p, no positional task, no @file
+```
+
+`PI_SUBAGENT_E2E_JSON_CHILD=1` is a test-only escape hatch. The legacy `persistentChildren` config is a no-op.
+
+### Framing and prompt delivery
+
+- RPC is strict LF-only JSONL; never use Node `readline` because it splits U+2028/U+2029.
+- One record is capped at 16 MiB; an oversized record is dropped with an empty-line placeholder behavior defined by the protocol helper.
+- A false `stdin.write()` means the chunk was accepted into the stream buffer; queue only subsequent records until one persistent `drain` listener flushes.
+- Every `runSingleAttempt` attaches RPC transport and sends the initial `prompt` over stdin after spawn, regardless of registry presence.
+- Prompt delivery is never gated on child retention/registry registration.
+- Immediately after queuing the initial prompt, publish a running partial update so the native parent tool component renders before first child output.
+
+### Completion and retention
+
+- `agent_settled` is logical task completion; the process may remain resident for conversation.
+- Successful registered children remain resident.
+- Unregistered successful children close gracefully after finalization.
+- Failed/timeout/budget/interrupt children are unregistered and closed; they have no safe conversational future.
+- Graceful close: cancel dialogs → stdin EOF (session persist) → bounded grace → SIGTERM → SIGKILL.
+- Force close skips EOF.
+- Spawned/piped processes use post-exit stdio guards and guarded signals.
+
+### Registry invariants
+
+```ts
+createRpcChildRegistry(): RpcChildRegistry;
+```
+
+- one entry per child key;
+- callers check `has()` before register/reopen to preserve one writer;
+- re-register replaces the handle only through the explicit registry contract;
+- idle/overflow eviction touches settled children only and skips the actively viewed key;
+- every routed child input refreshes activity;
+- session shutdown closes retained children gracefully.
+
+## 8. Unified `ChildConversationChannel`
+
+The viewer knows only:
+
+```ts
+interface ChildConversationChannel {
+  readonly key: string;
+  write(record: RpcOutgoingRecord): void;
+  onStdoutLine(cb: (line: string) => void): () => void;
+  readonly settled: boolean;
+  readonly closed: Promise<void>;
+  lastActivityAt: number;
+  touch(): void;
+  close(kind: "graceful" | "force"): Promise<void>;
+  readonly exitCode?: number;
+}
+```
+
+Kinds:
+
+- foreground resident/reopened child → `LocalRpcChannel`;
+- running detached child → `AsyncBridgeChannel`;
+- terminal detached child with session → wait for runner death, reopen, then `LocalRpcChannel`.
+
+`resolveChildChannel(target)` is the only foreground/detached branch point. Viewer, assembler, input routing, and key routing remain transport-agnostic.
+
+When the active channel closes, host-editor mode re-resolves while retaining the same accumulated assembler. A successful replacement swaps subscriptions and heartbeat; failure closes child mode with a clear notice. A rate guard prevents reopen loops.
+
+The parent reopens a detached child's session only after confirming the runner PID is dead (bounded wait, ESRCH authority). Never create a second session writer while the runner owns the child.
+
+## 9. Detached conversation bridge
+
+Per-child bridge files live under:
+
+```text
+<asyncDir>/conversation/<stepKey>.requests.jsonl
+<asyncDir>/conversation/<stepKey>.stdout.jsonl
+<asyncDir>/conversation/<stepKey>.active
+```
+
+`stepKey` is derived identically on parent and runner sides from sanitized step index and agent.
+
+### Requests
+
+- Forward allowed prompt/get_commands/abort/model/thinking records verbatim through `writeLine` so caller IDs are preserved.
+- Do not use a helper that overwrites the request ID.
+- `ping` is answered locally with a relay marker.
+- Viewer-hostile session mutation records (`new_session`, `switch_session`, `fork`, `clone`) are not forwardable.
+- Unknown request types are ignored safely.
+
+### Stdout relay
+
+- Mirror every raw child stdout line and synthetic lifecycle markers (`child_ready`, `child_settled`, `child_closed`, `child_unavailable`, `pong`, `relay_reset`).
+- Parent tailing uses a byte cursor and LF-only framing.
+- Pre-seeded history is not redelivered.
+- Relay cap/truncate emits `relay_reset`; the viewer resyncs from new EOF without duplicating the preserved conversation.
+
+### Heartbeat/lifecycle
+
+- Parent rewrites `<stepKey>.active` roughly every five seconds while viewing.
+- Runner treats heartbeats fresh for 30 seconds.
+- Freshly viewed children are excluded from runner idle/cap eviction.
+- At finalization, the runner may linger up to ten minutes for active conversation, then closes children gracefully.
+- Parent clears heartbeats on view close, target switch, and session shutdown.
+
+## 10. Live transcript lifecycle
 
 ```ts
 resolveLiveTranscriptPath(input: {
@@ -57,558 +366,183 @@ retainLiveTranscript(path?: string, deps?: LiveTranscriptDeps): () => void;
 markLiveTranscriptTerminal(path?: string, deps?: LiveTranscriptDeps): void;
 ```
 
-TUI entry:
+- Persistent artifacts use their configured path.
+- Otherwise use `<TEMP_ROOT_DIR>/live-transcripts/<runId>/<index>.jsonl`.
+- A view acquires a lease before reading and releases it on every close/error/dispose path.
+- Terminal cleanup deletes a temporary transcript only after true child termination and zero leases.
+- A detached launch receipt is not termination.
+- One parent session never recursively deletes the global live-transcript root.
+- Non-`ENOENT` lease read failures preserve the transcript.
+- Transcript rows represent finalized message/tool events, not token deltas.
 
-- `/subagents` is the reliable command entry.
-- Empty-editor Down is a convenience listener only.
-- The child chat is a capturing overlay opened through `ctx.ui.custom()`.
+## 11. Unified detached execution lifecycle
 
-### 3. Contracts: requests, responses, environment, and lifecycle
-
-#### Action request
-
-```ts
-interface ChildControlActionRequest {
-  version: 1;
-  type: "action";
-  id: string;       // non-empty, unique per request
-  ts: number;       // finite, non-negative epoch milliseconds
-  action: string;   // non-empty semantic action name
-  payload?: unknown;
-  source?: string;  // non-empty when present
-}
-```
-
-#### Action response
-
-```ts
-interface ChildControlActionResponse {
-  version: 1;
-  type: "action_response";
-  requestId: string;
-  ts: number;
-  status: "applied" | "rejected";
-  action: string;
-  result?: unknown; // allowed only for applied
-  error?: string;   // required only for rejected
-}
-```
-
-The parent correlates responses by `requestId`. A transcript notice is audit
-information, not acknowledgement authority.
-
-#### Directory and environment contract
+After count expansion:
 
 ```text
-<run>/control/
-├─ steer-targets/<index>/
-└─ action-targets/<index>/
-   ├─ requests/
-   └─ responses/
+one concrete invocation  -> single -> executeAsyncSingle
+multiple invocations     -> parallel -> executeAsyncChain
 ```
 
-- `PI_SUBAGENT_STEER_INBOX` points to the child steer inbox.
-- `PI_SUBAGENT_ACTION_CONTROL_DIR` points to that child's action target
-  directory containing `requests/` and `responses/`.
-- Action files must never be written to `steer-targets`; the steer consumer
-  removes JSON files that are not valid steer requests.
-- Foreground run roots live below the per-user runtime root and are registered
-  before child spawn. Async steps receive deterministic per-step directories.
-- JSON files are written atomically. Consumers claim files before parsing or
-  applying non-idempotent actions.
+One canonical mode and one generated run ID flow through spawn reservation, runner config, nested metadata, start event, persisted status, tracker/widget, and final details.
 
-#### `cycleThinking` contract
+All public calls launch detached:
 
-- Determine supported levels from the child model metadata and the shared Pi
-  0.82 compatibility layer.
-- Do not hard-code a loop containing unsupported `off`, `xhigh`, or `max`.
-- Call the public child `getThinkingLevel()` / `setThinkingLevel()` APIs and
-  return the actual post-set level.
-- No model, a non-reasoning model, an invalid payload, an unknown action, or an
-  exception produces a `rejected` response.
-- Replaying a request ID must return or preserve its authoritative response;
-  it must not cycle thinking a second time.
+- caller detach policy true → launch receipt;
+- caller detach policy false/default → claim sync ownership, launch, exact-run integrated wait, rich completion conversion.
 
-#### Live-transcript lifecycle
+Every successful launcher emits its start event immediately after successful spawn and before returning. A chain/parallel start includes lifecycle version, run ID, PID, current session ID, canonical mode, cwd, async directory, flattened agents, parallel/workflow metadata, nested route, and applicable budgets/deadline. Failed launch emits no start event.
 
-- If persistent transcript artifacts are enabled, use the artifact path.
-- Otherwise use `<TEMP_ROOT_DIR>/live-transcripts/<runId>/<index>.jsonl`.
-- A view retains a temporary transcript with a lease and releases it on every
-  close/dispose/error path.
-- `markLiveTranscriptTerminal()` removes the temporary transcript only after
-  the child is truly terminal and no leases remain.
-- A detached foreground receipt is not child termination.
-- One host session shutdown must not recursively delete the global live-
-  transcript root; other sessions or detached/async runs may still own files.
-- Transcript output represents finalized message/tool events, not token deltas.
+The tracker is the sole active-run indicator owner. Start inserts the queued job and mounts the editor-top widget immediately; polling updates running/activity/attention/terminal state; completion retention and removal follow tracker policy. Sync launch-plus-wait uses the same indicator and remains visible if attention/abort returns before terminal completion.
 
-#### TUI and plugin compatibility
+## 12. Integrated wait
 
-- Use a capturing overlay with `overlay: true`, `width: "100%"`,
-  `maxHeight: "100%"`, `margin: 0`, and `anchor: "center"`.
-- Do not call `switchSession()` or `newSession()` and do not use a non-overlay
-  custom component as a full chat replacement.
-- Do not install a replacement CustomEditor.
-- The Down terminal listener consumes input only when the feature is enabled,
-  the editor is empty, an active child exists, and this extension has no open
-  modal. Every other input returns `undefined` unchanged.
-- Terminal listeners run in registration order, so `/subagents` remains the
-  supported fallback when another extension consumes Down first.
-- For `/xxx` entered in the child view: call `done()`, await the custom UI
-  promise, then call `ctx.ui.setEditorText(text)`. This preserves built-in and
-  third-party slash-command dispatch.
-- Components using `Input` propagate `Focusable.focused`, dispose timers and
-  transcript leases, and never render a line wider than the supplied width.
-
-### 4. Validation & Error Matrix
-
-| Condition | Required behavior |
-|---|---|
-| Wrong version/type, extra schema key, empty id/action, invalid timestamp | Reject/discard the file without crashing the runner or child. |
-| Rejected response has no error or contains a result | Treat the response as invalid. |
-| Applied response contains an error | Treat the response as invalid. |
-| Two consumers race for one file | Atomic claim allows at most one winner. |
-| Request ID already has an authoritative response | Do not apply the action again. |
-| Response write temporarily fails after action application | Retain/retry the response; never reapply the action. |
-| Unknown action or unsupported thinking | Write one `rejected` response with a useful error. |
-| Async/foreground target is terminal or index is invalid | Reject before writing steer/action to a stale inbox. |
-| Transcript path escapes controlled roots | Refuse to read it and use a safe fallback/error state. |
-| Transcript is truncated, replaced, partially written, or malformed | Reset/buffer/skip safely; keep polling without crashing the overlay. |
-| Lease-directory read fails with non-`ENOENT` | Preserve the transcript; do not assume there are no viewers. |
-| Overlay closes, session reloads, or context becomes stale | Stop timers, release leases, unregister listeners, and restore parent focus. |
-| Earlier terminal listener consumes Down | Do nothing; `/subagents` remains available. |
-
-### 5. Good, Base, and Bad Cases
-
-- **Good:** the user picks a live foreground child, presses Shift+Tab, the
-  parent writes one versioned request, the child claims it once, applies the
-  next model-supported level, writes an `applied` response, and the overlay
-  displays the actual level for that request ID.
-- **Base:** a queued async step already has an action request in its deterministic
-  inbox. The child consumes it after spawn; no runner-routing hop is needed.
-- **Good:** persistent transcripts are disabled. The parent tails a scoped
-  temporary transcript, keeps it while the overlay lease is active, and removes
-  it only after real child exit and lease release.
-- **Bad:** write `{ type: "action" }` into the steer inbox. The steer consumer
-  deletes it and no response can be produced.
-- **Bad:** open the child's session file with `switchSession()` to reuse native
-  rendering. This tears down/rebinds the parent runtime, cannot live-tail an
-  externally written session safely, and risks concurrent writers.
-- **Bad:** call `setEditorText("/plugin")` before the overlay promise resolves.
-  Pi's custom-UI restoration may overwrite the text.
-
-### 6. Tests Required
-
-Unit assertions:
-
-- strict request/response parsing, including extra keys and applied/rejected
-  invariants;
-- atomic claim race, response replay, response-write retry, malformed files,
-  and TTL cleanup;
-- `cycleThinking` supported-level selection, post-set actual value, and every
-  rejection branch;
-- persistent versus temporary transcript resolution, lease-before-terminal,
-  terminal-before-release, detached timing, and non-`ENOENT` preservation;
-- transcript partial line, truncate, replace, in-place overwrite, malformed
-  record, trusted-root escape, and fallback;
-- target merge precedence and legacy state without live-child maps;
-- overlay width, rendered-line scrolling, Focusable propagation, steer marker,
-  response request-ID isolation, slash-close result, and timer disposal.
-
-Integration assertions:
-
-- sequential/parallel/dynamic async spawn receives the action directory;
-- parallel foreground children register distinct live routes and clean up only
-  after the last true exit;
-- foreground/detached steer rejects stale children and reaches live children;
-- `/subagents` coexists with `/subagents-fleet`; Down gates strictly and never
-  replaces another CustomEditor; overlay closes before editor prefill;
-- full overlay options are exactly the capturing full-terminal contract.
-
-Real-session E2E assertions (using the faux provider, never a real API key):
-
-- a foreground child consumes steer and the finalized transcript contains its
-  unique delivery marker;
-- `cycleThinking` returns an applied response from the child runtime;
-- `artifacts: false` still creates, updates, retains, and cleans a temporary
-  live transcript.
-
-### 7. Wrong vs Correct
-
-#### Wrong
+Public shape:
 
 ```ts
-// Mixed transport: the steer parser can consume and delete this file.
-writeAtomicJson(path.join(steerInbox, "action.json"), actionRequest);
-
-// Parent-session takeover breaks the orchestrator and plugin state.
-await ctx.switchSession(childSessionFile);
-
-// Pi may restore the saved editor text after this call.
-ctx.ui.setEditorText("/third-party-command");
-done();
+subagent({ action: "wait", id?, all? })
 ```
 
-#### Correct
+Algorithm:
 
-```ts
-const request = requestControlAction(child.actionControlDir, "cycleThinking", {
-  source: "tui",
-});
+1. list active runs owned by the current session and authorized lifecycle root;
+2. resolve exact ID before unique prefix;
+3. snapshot target IDs;
+4. subscribe to completion/control/supervisor events;
+5. reconcile persistent status after subscribing;
+6. keep a poll fallback for missed events;
+7. return when the predicate matches.
 
-const result = await showChildOverlay(child);
-if (result.kind === "slash") {
-  // showChildOverlay has fully closed and restored the parent editor here.
-  ctx.ui.setEditorText(result.text);
-}
+Predicates:
 
-// Match only the response belonging to this view's request.
-const response = consumeControlActionResponses(child.actionControlDir)
-  .find((candidate) => candidate.requestId === request.id);
-```
+- no ID/default: first snapshotted terminal or actionable attention;
+- no ID/`all:true`: all snapshotted terminal unless attention intervenes;
+- ID: resolved target terminal or actionable attention;
+- no active match: immediate result;
+- terminal: complete, failed, or paused;
+- actionable: `needs_attention`, pending `need_decision`, or pending `interview_request` scoped to target IDs;
+- non-actionable: `active_long_running`, ordinary control progress, or `progress_update`.
 
-**Language**: All documentation is written in **English**.
+There is no elapsed orchestration timeout. AbortSignal ends only the tool call and leaves the runner alive. Runner-level deadline/budget failure remains a normal terminal completion.
 
----
+Root wait sees top-level run/result roots. A fanout child sees only `<TEMP_ROOT_DIR>/nested-subagent-runs/<rootRunId>` and `RESULTS_DIR/nested/<rootRunId>`. If no authorized root can be resolved, return a clear unavailable management result instead of broadening visibility.
 
-## Persistent RPC execution children (unconditional)
+## 13. Completion broker and notification ownership
 
-### Scope / Trigger
+The broker is session-scoped, bounded, and TTL-pruned. It stores:
 
-Every foreground and async execution child is a persistent Pi RPC process
-(`--mode rpc`, stdin piped). Logical completion is `agent_settled`; the
-process stays resident for direct conversation until evicted. JSON one-shot
-(`--mode json -p`) was removed 2026-08-02; `PI_SUBAGENT_E2E_JSON_CHILD`
-retains a test-only escape hatch. Modules:
-`src/runs/persistent/{rpc-protocol,rpc-child-registry}.ts`,
-`src/runs/foreground/execution/*`, `src/runs/background/runner/*`,
-`src/tui/steer-view/{host-editor-mode,reopen-bridge}.ts`,
-`src/extension/index.ts`, `src/extension/config.ts`.
+- normalized rich completions by exact run ID;
+- sync ownership by exact run/session with canonical mode and concrete task descriptors;
+- exact-run waiters.
 
-### Signatures
+Result watcher ordering is load-bearing:
 
-```ts
-// pi-args
-buildPiArgs({ mode: "rpc" });                       // always --mode rpc, no -p, no positional task, no @file
-// foreground execution
-runSingleAttempt(..., options: RunSyncOptions, ...): Promise<SingleResult>;
-// foreground parallel input
-interface ForegroundParallelRunInput {
-  persistentChildRegistry?: RpcChildRegistry;
-}
-// rpc-protocol
-attachRpcProtocol(child): { write: RpcWrite; reader: RpcLineReader };
-// rpc-child-registry
-createRpcChildRegistry(): RpcChildRegistry;       // get/has/register/unregister/evictIdle/evictOverflow/closeAll
-createRpcChildCloser(child, deps): (kind: "graceful" | "force") => Promise<void>;
-// eviction defaults (hardcoded; config switch removed)
-IDLE_EVICTION_MS = 15 * 60 * 1000; MAX_RESIDENT_CHILDREN = 4;
-// host-editor mode
-createHostEditorConversation({ getResidentChild }): HostEditorConversationHandle;
-// reopen bridge
-createReopenBridge({ registry, getChildLaunchArgs, cwd }): ReopenBridge;
-```
+1. parse and validate owning session;
+2. normalize nested/child rich result data;
+3. cache in the broker;
+4. deliver result intercom when configured;
+5. emit completion;
+6. release sync ownership after synchronous completion listeners observe it;
+7. unlink the result file.
 
-### Contracts
+This prevents both lost fast completions and duplicate sync completion turns. `registerSubagentNotify` suppresses `triggerTurn:true` only while that run is sync-owned. A general observer wait never owns the result and never suppresses independently detached completion notification.
 
-- RPC framing is strict LF-only JSONL on child stdin/stdout. Never use Node
-  `readline` (it splits on U+2028/U+2029). Reader caps single records at
-  16 MiB and emits an empty line as a placeholder.
-- Backpressure: a false return from `stdin.write()` means the chunk was
-  accepted into the stream's internal buffer; only subsequent lines queue
-  until `drain` (single persistent drain listener — `once` per write
-  double-flushes).
-- Task delivery: every `runSingleAttempt` attaches `RpcWrite` and sends the
-  initial `prompt` over stdin after spawn, regardless of whether
-  `persistentChildRegistry` exists. `@file` and positional `Task:` text are
-  never used (Pi RPC rejects `@file`, ignores CLI positional messages).
-- Initial rendering: immediately after queuing the initial prompt,
-  `state.fireUpdate()` publishes a partial result whose progress status is
-  `running`. This gives the native parent `ToolExecutionComponent` a result
-  row and starts `renderSubagentResult`'s inline animation before the first
-  child stdout event.
-- Completion: `agent_settled` → logical completion → finalize result.
-  Registered successful children stay resident for direct conversation;
-  unregistered children are gracefully closed after finalization. Failed
-  registered runs (timeout/budget/interrupt/error) are evicted (unregister +
-  graceful close) because they have no conversational future.
-- Registry propagation: root foreground parallel execution carries
-  `ExecutorDeps.persistentChildRegistry` through
-  `ForegroundParallelRunInput` into every `runSync` call. Dropping it makes
-  the children execute but loses post-settle host-editor residency.
-- Registry invariants: one entry per child key; re-register replaces the
-  handle (callers check `has()` first); evictIdle only touches settled
-  children; evictOverflow evicts least-recently-active settled first, never
-  an active/streaming one.
-- Graceful close: cancel pending dialogs → stdin EOF (Pi persists session) →
-  bounded grace → SIGTERM → SIGKILL. Force close skips EOF.
-- Host-editor routing: `pi.on("input")` returns `{action:"handled"}` only
-  while child mode is active; `!bash` and single `/` return `"continue"`
-  (parent-owned). `//name` → RPC `prompt: "/name args"`. Unknown `//name`
-  must not fall through to a child LLM prompt.
-- Session files: the RPC child is the sole writer. The parent never opens a
-  child session via `SessionManager.open`. Reopen bridge is guarded by the
-  registry (never a second writer).
-- Async children live in a separate runner process; their RPC registry lives
-  in that process and is closed gracefully before the runner exits.
-- Native child components receive a lazy adapter whose `requestRender()`
-  delegates to the real `TUI` captured by the host widget factory. Never cast
-  `ExtensionUIContext` to `TUI`: it does not implement `requestRender()`.
+Sync terminal conversion returns full normal `AgentToolResult<Details>` content and metadata. Missing legacy per-child usage becomes explicit zero usage, never aggregate-derived estimates.
 
-### Validation & Error Matrix
+Attention, abort, launch failure, session reset, TTL expiry, and dispose release ownership without interrupting the detached process. Completion cache lifetime is independent so a late exact waiter can still recover a fast result.
 
-| Case | Behavior |
+## 14. Error and validation matrix
+
+| Case | Required behavior |
 | --- | --- |
-| RPC child crashes while host-editor mode active | Mode auto-closes, widget removed, input returns to parent; session file intact |
-| `agent_settled` never arrives | Timeout/budget/interrupt paths terminate the process (failed run) |
-| Foreground execution has no registry | Prompt and initial running update are still delivered; after settle/finalization the RPC child closes gracefully |
-| Foreground parallel execution has a registry | Every task receives the same registry; successful settled children remain viewable by child key |
-| Native tool calls `setArgsComplete()` before/after widget mount | Lazy adapter no-ops before mount and delegates to the captured real TUI after mount; never throws |
-| Reopen while resident entry exists | Returns existing entry; never spawns a second writer |
-| `--no-session` child | `residentChild` continuity unavailable; viewer falls back to read-only/steer |
-| `persistentChildren` config | Deprecated no-op (2026-08-02): all children are RPC regardless; `PI_SUBAGENT_E2E_JSON_CHILD=1` keeps the test JSON path |
+| Invalid picker JSON/value/member | No binding; do not consume ordinary input; report safely once where UI is available |
+| Child inactive or editor non-empty on `app.exit` | Pass through |
+| `/quit` or `/exit` outside editable child mode | Pass through to host |
+| Double-Ctrl+C | Host owns it |
+| Transcript path escapes trusted roots | Refuse and use safe fallback/error state |
+| Transcript truncates/replaces/has malformed or partial line | Reset/buffer/skip safely; continue polling |
+| RPC line exceeds cap | Drop through protocol's bounded behavior; do not crash host |
+| Child crashes while active | Re-resolve channel; reopen when safe, otherwise close mode and restore parent input |
+| Reopen while runner alive | Wait boundedly; never create second session writer |
+| Bridge relay truncates | `relay_reset`, resync, no preserved-history duplication |
+| Control consumers race | Atomic claim permits at most one application |
+| Response persistence temporarily fails after action | Retry/preserve response; never reapply action |
+| Wait ID prefix is ambiguous | Clear error; do not select arbitrarily |
+| Wait aborts | Tool returns; detached run stays alive |
+| Completion happens before wait subscription/file unlink | Broker cache returns full normalized result |
+| Sync-owned completion | No duplicate automatic completion turn |
+| Ordinary detached completion | Normal notification remains enabled |
+| One/count:1 launch | `single` everywhere; never `parallel` |
 
-### Good, Base, and Bad Cases
+## 15. Required tests
 
-- **Good:** a one-task foreground parallel call receives the root registry,
-  sends its task as an RPC prompt, publishes a running partial result, settles,
-  completes the parent tool, and remains available in the child viewer.
-- **Base:** a nested/direct caller has no registry. The same prompt and running
-  update are delivered, the parent tool completes on `agent_settled`, and the
-  child receives stdin EOF and exits without leaking.
-- **Bad:** guard `attachRpcProtocol()` or the initial `prompt` write with
-  `if (registry)`. The RPC process launches idle, produces no gateway request,
-  never settles, and leaves the parent tool's working indicator active.
-- **Bad:** pass `ctx.ui as TUI` into native child components. A tool call that
-  reaches `setArgsComplete()` throws because `ExtensionUIContext` has no
-  `requestRender()` method.
+### Unit
 
-### Tests Required
+- strict picker parsing: absent/string/array/`[]`, dedupe, invalid member/shape/file, key grammar;
+- exit matrix: default/remap/remove/multiple/legacy, empty/non-empty, submit remap, `/quit`, `/exit`, inactive/modal states;
+- complete widget history, short padding, resize/invalidate stability, no tail slicing;
+- transcript partial/truncate/replace/malformed/trusted-root/fallback behavior;
+- native assembler role selection, tool pairing, streaming, settings reapply, generic fallbacks;
+- host editor routing and child app-key remap/remove behavior;
+- strict action request/response parsing, claim race, replay, response retry;
+- RPC LF framing, fragmentation, record cap, backpressure; registry eviction/one-writer/graceful close;
+- bridge request ID preservation, relay markers/cap, heartbeat expiry;
+- integrated wait snapshot/exact-prefix/all/attention/supervisor/abort/no-timeout behavior;
+- completion broker size/TTL/session/dispose/fast cache and rich conversion;
+- notification suppression only for sync ownership;
+- canonical mode and call-label rendering.
 
-- `test/unit/rpc-protocol.test.ts` — LF-only splitting (U+2028), CRLF strip,
-  fragmentation, >16MiB drop, backpressure queue/flush.
-- `test/unit/rpc-child-registry.test.ts` — one-writer, idle/overflow eviction,
-  graceful vs force close.
-- `test/unit/host-editor-mode.test.ts` — routing matrix (ordinary/`//name`/
-  single `/`/`!bash`), close stops routing, native `setArgsComplete()` does not
-  throw, and repaint counts increase monotonically.
-- `test/unit/reopen-bridge.test.ts` — fresh reopen, one-writer guard, no-file.
-- `test/integration/foreground-rpc-child.test.ts` + async RPC tests — settle
-  → resident → evict; `--mode rpc` arg; task-over-stdin; no-registry prompt +
-  first running update + graceful close; parallel registry propagation and
-  completion.
+### Integration
 
-### Wrong vs Correct
+- exact package slash registration equals `['subagents']` and no package prompts;
+- picker to host-editor activation and shared exit teardown;
+- enough parent/child history to prove complete child-only root contribution;
+- foreground resident, running bridge, terminal reopen, no-session degraded matrix;
+- real runner bridge prompt/response/heartbeat/close round trip;
+- single and parallel launch start events feed tracker/widget before result;
+- rich result watcher caches before delayed intercom/event/unlink;
+- synchronous single/parallel completion, failure/paused/attention/abort-run-survival;
+- persistent RPC prompt-over-stdin, initial running update, settle/retention/close;
+- current-session and authorized-nested-root wait scoping.
 
-#### Wrong
+### E2E
+
+Use the faux provider only:
+
+- detached launch-plus-wait returns the full result;
+- child conversation consumes prompt/control and retains finalized transcript;
+- no real API key or external provider call.
+
+## 16. Wrong vs correct
+
+Wrong:
 
 ```ts
-// readline splits on U+2028 — corrupts records.
-readline.createInterface({ input: child.stdout });
-
-// Buffering the backpressured chunk again double-writes it.
-if (!stdin.write(chunk)) { queue.push(chunk); }
-
-// Killing the settled child loses the session persist handshake.
-trySignalChild(proc, "SIGKILL"); // on successful agent_settled
-
-// Registry-gated transport leaves no-registry/nested RPC children idle.
-if (registry) attachRpcProtocol(proc).write.write({ type: "prompt", message: task });
-
-// ExtensionUIContext is not a TUI and has no requestRender implementation.
-createChildConversationAssembler({ ui: ctx.ui as unknown as TUI });
-
-// Parent writes the child's session file (second writer).
-SessionManager.open(childSessionFile).appendMessage(msg);
+if (matchesKey(input, "ctrl+d")) process.exit(0);
+return content.slice(-availableRows);
+await wait({ timeoutMs: 1_800_000 });
+SessionManager.open(childSessionFile).appendMessage(message);
+if (registry) attachRpcProtocol(child).write.write({ type: "prompt", message: task });
 ```
 
-#### Correct
+Correct:
 
 ```ts
-// LF-only JSONL writer with drain backpressure.
-rpcWrite.write({ type: "prompt", message: text, streamingBehavior });
+if (getKeybindings().matches(input, "app.exit") && editorText === "") {
+  await exitSubagentView(ctx);
+  return { consume: true };
+}
 
-// Transport is unconditional; registry registration controls retention only.
-const rpcWrite = attachRpcProtocol(proc).write;
-registry?.register(child);
-rpcWrite.write({ type: "prompt", message: task });
+return content.length < minimumRows
+  ? [...content, ...Array(minimumRows - content.length).fill("")]
+  : content;
+
+await subagent({ action: "wait", id: runId });
+
+const rpc = attachRpcProtocol(child);
+registry?.register(resident);
+rpc.write.write({ type: "prompt", message: task });
 state.fireUpdate();
-
-// Settle = logical completion; retained children stay resident.
-if (event.type === "agent_settled") state.finish(0);
-
-// Unretained children close gracefully after finalization.
-if (!registry) await child.close("graceful");
-
-// Native components delegate repaint to the widget factory's real TUI.
-const componentUi = { requestRender: () => widgetTui?.requestRender() } as TUI;
-
-// Graceful close persists the session (stdin EOF → Pi shutdown).
-await resident.close("graceful");
-
-// Parent never writes child sessions; reopen is registry-guarded.
-if (!registry.has(key)) registry.register(reopen(target));
 ```
 
-### Viewer-activity eviction and target switch
-
-- `evictIdle(idleMs, { except })` and `evictOverflow(max, { except })` skip the
-  excluded key; the extension eviction loop passes the active host-editor
-  target's resident key so the child being conversed with is never evicted.
-- `hostEditorConversation.routeInput` refreshes `resident.lastActivityAt` on
-  every routed input.
-- Selecting a new child while host-editor mode is active closes the old
-  conversation first (`showChat`), then opens the new target; re-selecting the
-  active target is a no-op. `open()` is re-entrant (second `/subagents`
-  reopens the picker).
-- `refreshCommands` binds the pending get_commands refresh to the requesting
-  resident key; a stale refresh resolving after a target switch never writes
-  one child's command set into the active child's cache. Timeout/no-stdout
-  results are not cached (a later `//name` re-requests).
-
-## Unified native child conversation (host editor + host rendering + async bridge)
-
-### Scope / Trigger
-
-Apply this contract whenever code touches the child conversation surface, the
-runner conversation bridge, the transport abstraction, or the child-mode key
-routing. Modules: `src/tui/child-conversation/*`,
-`src/tui/steer-view/{host-editor-mode,open-view,child-channel,child-key-route,
-async-bridge-channel,bridge-relay-tail,child-commands}.ts`,
-`src/runs/background/runner/conversation-bridge/*`,
-`src/extension/index.ts`, `src/extension/config.ts`.
-
-### Contracts
-
-- **Transport abstraction**: the viewer only knows `ChildConversationChannel`
-  `{key, write(record), onStdoutLine(cb), settled, closed, lastActivityAt,
-  touch, close(kind), exitCode?}`. Foreground = `LocalRpcChannel` (wraps
-  `PersistentRpcChild`), async running = `AsyncBridgeChannel` (file bridge),
-  async terminal = reopen → `LocalRpcChannel`. The ONLY sync/async branch
-  point is `resolveChildChannel(target)` in `child-channel.ts`; viewer,
-  assembler, and input routing have no async branch.
-- **Runner bridge protocol** (`asyncDir/conversation/<stepKey>.*`):
-  - stepKey = `${sanitize(stepIndex)}-${sanitize(agent)}`, sanitize `[^\w.-]→"_"`
-    (paths.ts is load-bearing; both sides resolve it with the same function).
-  - `requests.jsonl`: parent→runner `{id, ts, type, message?, streamingBehavior?,
-    images?}`; the runner forwards prompt/get_commands/abort/model/thinking
-    records VERBATIM to the child's RPC stdin **via writeLine (preserves the
-    caller's id — `write()` would overwrite it)**; ping answered locally with a
-    `pong` relay marker; viewer-hostile session mutations (new_session,
-    switch_session, fork, clone) are NOT forwardable.
-  - `stdout.jsonl`: runner mirrors every child stdout line + synthetic markers
-    (`child_ready`/`child_settled`/`child_closed`/`child_unavailable`/`pong`/
-    `relay_reset`); parent tails with a byte cursor (pre-seeded history never
-    re-delivered; `relay_reset` → resync from new EOF). Raw child lines are fed
-    verbatim to the same assembler parser as foreground RPC stdout.
-  - `<stepKey>.active`: parent heartbeat `{ts}` rewritten ~every 5s; runner TTL
-    30s. Fresh heartbeat ⇒ child is conversing: excluded from runner idle/cap
-    eviction, and at `finalizeRun` the runner lingers (≤10min) before closeAll.
-  - Parent clears heartbeats on viewer close / target switch / session shutdown
-    (`closeAllOpenAsyncBridgeChannels`).
-- **Reopen race guard**: the parent reopens a terminal async child's session
-  only after the runner pid is confirmed dead (`process.kill(pid,0)`→ESRCH,
-  bounded ≤5s); region-of-authority keeps single-writer per session across
-  processes (runner closes children → parent reopen).
-- **Foreground live children carry sessionFile**: `ForegroundLiveChild`
-  records `sessionFile` at registration, and `fromForeground` forwards it
-  into `SteerViewTarget`. `resolveForeground` therefore always has a reopen
-  path when `getForegroundResident` returns undefined (process exited/evicted)
-  — without this, a foreground child whose process had exited left the target
-  with no sessionFile and the viewer degraded to read-only
-  ("always read-only" bug, fixed 2026-08-02).
-- **Channel swap**: when the active channel's `closed` fires, host-editor
-  re-resolves; success → the accumulated assembler conversation survives (same
-  instance; new channel's stdout feeds it; key-route re-subscribes by channel
-  instance; heartbeat restarts). A 2s swap-rate guard stops reopen-spawn loops.
-- **Native assembler** (`child-conversation/assembler.ts`): ports
-  `addMessageToChat`/`renderSessionItems` role selection; toolCall↔toolResult
-  paired by toolCallId; `toolDefinition` stays undefined (generic — the
-  effective registry is private); unknown customType gets a labeled generic
-  fallback; settings (hideThinkingBlock/outputPad/showImages/imageWidthCells/
-  codeBlockIndent/hiddenThinkingLabel + `getToolsExpanded()`) re-applied per
-  settings pass via `setExpanded`/`setOutputPad`/`setHideThinkingBlock`…
-  Settings are read from `<agentDir>/settings.json` + `<cwd>/.pi/settings.json`
-  (project wins, deep merge, 500ms TTL) because extensions have no settings
-  accessor — the same file source the main view uses.
-- **Key routing** (`child-key-route.ts`): must resolve effective keys via the
-  **global `getKeybindings()` singleton** (`@earendil-works/pi-tui`), NOT
-  hand-written `matchesKey` loops. The global singleton carries the user's
-  `keybindings.json`, pi's default table, legacy migrations, and the
-  **leader-key extension's `matches` prototype patch** (gates `leader+<key>`
-  behind a pending state). A hand-written `matchesKey(data, "leader+m")`
-  matches the raw letter `m` and swallows it, diverging from the main agent.
-  Resolution order: `interrupt` first, then `app.*` actions. Esc → `abort`
-  only while streaming, else pass through. Editing-level keys are never
-  intercepted.
-- **Streaming render trigger**: `ctx.ui.requestRender?.()` is a no-op
-  (`ExtensionUIContext` has no `requestRender` method). The widget factory
-  receives `tui: TUI` (from `@earendil-works/pi-tui`) which has a public
-  `requestRender(force?)` method with ~16ms coalescing. The host-editor mode
-  MUST capture the `tui` reference from the widget factory and call
-  `tui.requestRender()` at the end of every `onRpcLine()` callback (both
-  notify and assembler branches). Clearing `widgetTui = undefined` on mode
-  close prevents stale renders.
-- **Full-height widget**: the widget renders exactly `W = rows − CHROME(≈11)`
-  lines (recomputed per render), blank-padded, so the parent chat rolls into
-  terminal scrollback; removing the widget restores the pre-mode viewport.
-- **Read-only degraded surface**: when no `ChildConversationChannel` can be
-  resolved (no resident, no bridge, no reopenable session), the overlay
-  (`SteerViewComponent`) renders as a **read-only transcript view** with NO
-  Input component. The header shows "continuity unavailable"; footer shows
-  "read-only · Esc back". Escape returns to the picker. Steer/thinking/scroll
-  controls remain available but the user cannot send new messages.
-
-### Validation & Error Matrix
-
-| Case | Behavior |
-| --- | --- |
-| Runner dies while a bridge conversation is open | relay/`closed` fires; re-resolve → reopen if terminal+session, else auto-close child mode with clear notice |
-| Relay truncated at cap | `relay_reset` marker; viewer resyncs from new EOF without duplicating the preserved tail |
-| Heartbeat stale (parent crash) | runner stops considering child conversing; next eviction/finalize closes it (10min linger cap) |
-| `--no-session` async child, run terminal | resolveChildChannel → undefined → degraded overlay (native-rendered, "continuity unavailable") |
-| User remaps/removes an app key | key resolution follows keybindings.json; removed keys silently skip interception |
-| Bridge request unknown type | ignored by the watcher (`REQUEST_TYPES` allowlist); child_unavailable when no resident |
-| Reopen while runner alive | resolver waits pid death; never a second session writer |
-
-### Wrong vs Correct
-
-```ts
-// Wrong: branch the viewer on async vs foreground.
-if (kind === "async") { /* different render path */ }
-
-// Wrong: readline over the relay (splits on U+2028/U+2029).
-readline.createInterface({ input: child.stdout });
-
-// Wrong: forward with write() — it overwrites id, breaking correlation.
-rpcWrite.write({ id: parentId, type: "prompt", ... });
-
-// Correct: one channel abstraction, resolved once.
-const channel = await resolveChildChannel(ctx, target, deps);
-channel.write({ type: "prompt", message: text, streamingBehavior, images });
-```
-
-```ts
-// Correct: the assembler receives the same raw records for foreground and
-// async — byte-fidelity from a single source at a time.
-channel.onStdoutLine((line) => assembler.addRpcLine(line));
-
-// Correct: re-resolve on channel death keeps the conversation.
-await channel.closed; const next = await resolveChildChannel(ctx, target, deps);
-if (next) { switchChannel(next); } else { closeWithNotice(); }
-
-// Correct: key routing follows the user's keymap.
-if (!keybindings.actionForKey(data)) return undefined;
-```
-
-### Tests Required
-
-- Unit: channel abstraction (write/id preservation, tail markers, heartbeat,
-  closed semantics), assembler (role selection, pairing, streaming flattening,
-  settings re-apply, fallbacks), child-keybindings (remap/remove matrix),
-  child-key-route (consume gating, idle-Esc pass-through), resolve matrix
-  (foreground resident/reopen, async boot race, terminal pid-death, no-session),
-  runner bridge (relay framing/cap/markers, requests round-trip, operational
-  commands allowlist, heartbeat expiry), reopen-swap guard.
-- Integration: conversation-bridge-roundtrip (real runner + mock child:
-  prompt → relayed response, heartbeat, child_closed).
+**Language**: All documentation is written in English.

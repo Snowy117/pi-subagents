@@ -6,7 +6,7 @@ import { registerSlashCommands } from "../../src/slash/slash-commands.ts";
 import { createEventBus, createState, type RegisteredSlashCommand } from "../support/slash-test-setup.ts";
 
 describe("interactive subagent view entry", () => {
-	it("registers /subagents while preserving /subagents-fleet", async () => {
+	it("registers /subagents as the exact package slash-command surface", async () => {
 		const commands = new Map<string, RegisteredSlashCommand>();
 		let opens = 0;
 		const controller = { modalOpen: false, open: async () => { opens++; }, close: () => {}, dispose: () => {} } as SteerViewController;
@@ -14,8 +14,7 @@ describe("interactive subagent view entry", () => {
 			events: createEventBus(), registerCommand: (name, spec) => commands.set(name, spec as RegisteredSlashCommand),
 			registerShortcut() {}, sendMessage() {},
 		} as never, createState("/tmp") as never, controller);
-		assert.ok(commands.has("subagents"));
-		assert.ok(commands.has("subagents-fleet"));
+		assert.deepEqual([...commands.keys()], ["subagents"]);
 		await commands.get("subagents")!.handler("", { hasUI: false } as never);
 		assert.equal(opens, 0);
 		await commands.get("subagents")!.handler("", { hasUI: true } as never);

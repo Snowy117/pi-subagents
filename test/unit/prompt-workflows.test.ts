@@ -3,8 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { discoverPromptWorkflows, registerPromptWorkflowCommands } from "../../src/slash/prompt-workflows.ts";
-import type { SubagentParamsLike } from "../../src/runs/foreground/subagent-executor.ts";
+import { discoverPromptWorkflows } from "../../src/slash/prompt-workflow-discovery.ts";
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
@@ -13,20 +12,7 @@ function writePrompt(dir: string, name: string, content: string): void {
 	fs.writeFileSync(path.join(dir, `${name}.md`), content, "utf-8");
 }
 
-function makeCtx(cwd: string) {
-	return {
-		cwd,
-		hasUI: true,
-		ui: {
-			notifications: [] as Array<{ message: string; level: string }>,
-			notify(message: string, level: string) {
-				this.notifications.push({ message, level });
-			},
-		},
-	} as never;
-}
-
-describe("prompt workflows", () => {
+describe("prompt workflow discovery", () => {
 	let tempDir = "";
 	let agentDir = "";
 	let cwd = "";
@@ -48,13 +34,13 @@ describe("prompt workflows", () => {
 	it("discovers project workflows over user workflows", () => {
 		writePrompt(path.join(agentDir, "prompts"), "native-test", `---
 description: User version
-subagent: reviewer
+subagent: user-specialist
 ---
 User body
 `);
 		writePrompt(path.join(cwd, ".pi", "prompts"), "native-test", `---
 description: Project version
-subagent: worker
+subagent: project-specialist
 model: openai/gpt-5-mini
 ---
 Project body $1
@@ -63,72 +49,34 @@ Project body $1
 		const workflow = discoverPromptWorkflows(cwd).find((entry) => entry.name === "native-test");
 
 		assert.equal(workflow?.description, "Project version");
-		assert.equal(workflow?.agent, "worker");
+		assert.equal(workflow?.agent, "project-specialist");
 		assert.equal(workflow?.model, "openai/gpt-5-mini");
 	});
 
-	it("runs a named workflow through native subagent execution", async () => {
-		writePrompt(path.join(cwd, ".pi", "prompts"), "native-run", `---
-description: Run native prompt
-subagent: reviewer
-model: anthropic/claude-sonnet-4
-skill: deslop,typescript-code
+	it("keeps user prompt discovery with neutral delegate defaults", () => {
+		writePrompt(path.join(agentDir, "prompts"), "user-prompt", `---
+description: User prompt
 ---
-Review $1 with $ARGUMENTS
+Inspect the target
 `);
-		const commands = new Map<string, { handler: (args: string, ctx: never) => Promise<void> }>();
-		const sent: unknown[] = [];
-		const runs: SubagentParamsLike[] = [];
-		registerPromptWorkflowCommands({
-			pi: {
-				registerCommand: (name: string, command: { handler: (args: string, ctx: never) => Promise<void> }) => commands.set(name, command),
-				sendMessage: (message: unknown) => sent.push(message),
-			} as never,
-			run: async (params) => { runs.push(params); },
-		});
 
-		await commands.get("prompt-workflow")!.handler('native-run target --fork --worktree', makeCtx(cwd));
+		const workflow = discoverPromptWorkflows(cwd).find((entry) => entry.name === "user-prompt");
 
-		assert.equal(sent.length, 0);
-		assert.equal(runs.length, 1);
-		assert.equal(runs[0]?.agent, "reviewer");
-		assert.equal(runs[0]?.model, "anthropic/claude-sonnet-4");
-		assert.deepEqual(runs[0]?.skill, ["deslop", "typescript-code"]);
-		assert.equal(runs[0]?.context, "fork");
-		assert.equal(runs[0]?.worktree, true);
-		assert.equal(runs[0]?.task, "Review target with target");
+		assert.equal(workflow?.description, "User prompt");
+		assert.equal(workflow?.agent, "delegate");
+		assert.equal(workflow?.body.trim(), "Inspect the target");
 	});
 
-	it("runs prompt templates as a native chain", async () => {
-		writePrompt(path.join(cwd, ".pi", "prompts"), "native-analyze", `---
-description: Analyze
-subagent: scout
+	it("does not reserve names from removed package commands", () => {
+		writePrompt(path.join(cwd, ".pi", "prompts"), "run", `---
+description: Project-owned run prompt
 ---
-Analyze $@
+Run the project workflow
 `);
-		writePrompt(path.join(cwd, ".pi", "prompts"), "native-fix", `---
-description: Fix
-subagent: worker
----
-Fix from {previous}: $@
-`);
-		const commands = new Map<string, { handler: (args: string, ctx: never) => Promise<void> }>();
-		const runs: SubagentParamsLike[] = [];
-		registerPromptWorkflowCommands({
-			pi: {
-				registerCommand: (name: string, command: { handler: (args: string, ctx: never) => Promise<void> }) => commands.set(name, command),
-				sendMessage: () => {},
-			} as never,
-			run: async (params) => { runs.push(params); },
-		});
 
-		await commands.get("chain-prompts")!.handler("native-analyze -> native-fix -- bug report", makeCtx(cwd));
+		const workflow = discoverPromptWorkflows(cwd).find((entry) => entry.name === "run");
 
-		assert.equal(runs.length, 1);
-		assert.equal(runs[0]?.chain?.length, 2);
-		assert.equal(runs[0]?.chain?.[0]?.agent, "scout");
-		assert.equal(runs[0]?.chain?.[0]?.task, "Analyze bug report");
-		assert.equal(runs[0]?.chain?.[1]?.agent, "worker");
-		assert.equal(runs[0]?.chain?.[1]?.task, "Fix from {previous}: bug report");
+		assert.equal(workflow?.description, "Project-owned run prompt");
+		assert.equal(workflow?.agent, "delegate");
 	});
 });

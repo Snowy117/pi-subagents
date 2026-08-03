@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
-import { createEventBus, createMockPi, createTempDir, events, makeAgent, makeAgentConfigs, makeMinimalCtx, removeTempDir } from "../support/helpers.ts";
-import { available, createSubagentExecutor, runSync } from "../support/single-execution-harness.ts";
+import { createMockPi, createTempDir, events, makeAgentConfigs, removeTempDir } from "../support/helpers.ts";
+import { available, runSync } from "../support/single-execution-harness.ts";
 import { createRpcChildRegistry } from "../../src/runs/persistent/rpc-child-registry.ts";
 
 describe("foreground persistent RPC child", { skip: !available ? "pi packages not available" : undefined }, () => {
@@ -126,66 +126,5 @@ describe("foreground persistent RPC child", { skip: !available ? "pi packages no
 		assert.ok(resident, "expected a resident registry entry — persistentChildren:false is now ignored, RPC mode is always used");
 		assert.equal(resident.settled, true);
 		await registry.closeAll("graceful");
-	});
-
-	it("executor injects persistentChildren from config with default true", async () => {
-		const registry = makeRegistry();
-		mockPi.onCall({ jsonl: [events.assistantMessage("done")] });
-		const executor = createSubagentExecutor!({
-			pi: { events: createEventBus(), getSessionName: () => undefined },
-			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
-			config: { persistentChildren: true },
-			asyncByDefault: false,
-			persistentChildRegistry: registry,
-			tempArtifactsDir: tempDir,
-			getSubagentSessionRoot: () => tempDir,
-			expandTilde: (value: string) => value,
-			discoverAgents: () => ({ agents: [makeAgent("echo")] }),
-		});
-
-		const result = await executor.execute(
-			"x",
-			{ tasks: [{ agent: "echo", task: "Task" }], cwd: tempDir },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.ok(!result.isError, `executor should succeed: ${JSON.stringify(result)}`);
-		const resident = registry.entries();
-		assert.equal(resident.length, 1);
-		await registry.closeAll("graceful");
-	});
-
-	it("propagates the persistent registry through foreground parallel prompt delivery and completion", async () => {
-		const registry = makeRegistry();
-		mockPi.onCall({ jsonl: [events.assistantMessage("parallel rpc done")] });
-		const executor = createSubagentExecutor!({
-			pi: { events: createEventBus(), getSessionName: () => undefined },
-			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
-			config: { persistentChildren: true },
-			asyncByDefault: false,
-			persistentChildRegistry: registry,
-			tempArtifactsDir: tempDir,
-			getSubagentSessionRoot: () => tempDir,
-			expandTilde: (value: string) => value,
-			discoverAgents: () => ({ agents: [makeAgent("echo")] }),
-		});
-
-		const result = await executor.execute(
-			"parallel-rpc",
-			{ tasks: [{ agent: "echo", task: "Parallel RPC task" }], cwd: tempDir },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.ok(!result.isError, `parallel executor should complete: ${JSON.stringify(result)}`);
-		assert.match(result.content[0]?.text ?? "", /parallel rpc done/);
-		assert.equal(registry.entries().length, 1, "settled parallel child remains available to the viewer");
-		await registry.closeAll("graceful");
-		const calls = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
-		const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, calls[0]!), "utf-8")) as { rpcPrompts?: Array<{ type?: string; message?: string }> };
-		assert.ok(payload.rpcPrompts?.some((entry) => entry.type === "prompt" && entry.message?.includes("Parallel RPC task")));
 	});
 });

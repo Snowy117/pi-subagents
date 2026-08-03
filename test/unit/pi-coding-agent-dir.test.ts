@@ -98,7 +98,7 @@ Use env agent.
 		writeFile(settingsPath, JSON.stringify({
 			subagents: {
 				agentOverrides: {
-					worker: { systemPrompt: "Use env-rooted settings." },
+					delegate: { systemPrompt: "Use env-rooted settings." },
 				},
 			},
 		}, null, 2));
@@ -108,10 +108,10 @@ Use env agent.
 		assert.equal(discovered.userSettingsPath, settingsPath);
 		assert.ok(discovered.user.find((agent) => agent.name === "env-agent" && agent.filePath === path.join(agentDir, "agents", "env-agent.md")));
 
-		const worker = discovered.builtin.find((agent) => agent.name === "worker");
-		assert.equal(worker?.systemPrompt, "Use env-rooted settings.");
-		assert.equal(worker?.override?.path, settingsPath);
-		assert.equal(worker?.override?.scope, "user");
+		const delegate = discovered.builtin.find((agent) => agent.name === "delegate");
+		assert.equal(delegate?.systemPrompt, "Use env-rooted settings.");
+		assert.equal(delegate?.override?.path, settingsPath);
+		assert.equal(delegate?.override?.scope, "user");
 
 		const createdName = "created-env-agent";
 		const created = handleCreate(

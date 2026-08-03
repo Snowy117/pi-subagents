@@ -154,6 +154,68 @@ export function executeAsyncChain(
 		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': ${spawnResult.error}`);
 	}
 
+	if (spawnResult.pid) {
+		const eventFirstStep = eventChain[0];
+		const firstAgents = isParallelStep(eventFirstStep)
+			? eventFirstStep.parallel.map((task) => task.agent)
+			: isDynamicParallelStep(eventFirstStep)
+				? [eventFirstStep.parallel.agent]
+				: [(eventFirstStep as SequentialStep).agent];
+		const parallelGroups: Array<{ start: number; count: number; stepIndex: number }> = [];
+		const flatAgents: string[] = [];
+		let flatStepStart = 0;
+		for (let stepIndex = 0; stepIndex < eventChain.length; stepIndex++) {
+			const step = eventChain[stepIndex]!;
+			if (isParallelStep(step)) {
+				parallelGroups.push({ start: flatStepStart, count: step.parallel.length, stepIndex });
+				flatAgents.push(...step.parallel.map((task) => task.agent));
+				flatStepStart += step.parallel.length;
+			} else if (isDynamicParallelStep(step)) {
+				parallelGroups.push({ start: flatStepStart, count: 1, stepIndex });
+				flatAgents.push(step.parallel.agent);
+				flatStepStart++;
+			} else {
+				flatAgents.push((step as SequentialStep).agent);
+				flatStepStart++;
+			}
+		}
+		if (inheritedNestedRoute && nestedAddress) {
+			const now = Date.now();
+			try {
+				writeNestedEvent(inheritedNestedRoute, {
+					type: "subagent.nested.started", ts: now,
+					parentRunId: nestedAddress.parentRunId, parentStepIndex: nestedAddress.parentStepIndex,
+					child: {
+						id, parentRunId: nestedAddress.parentRunId, parentStepIndex: nestedAddress.parentStepIndex,
+						depth: nestedAddress.depth, path: nestedAddress.path, asyncDir, pid: spawnResult.pid,
+						ownerIntercomTarget: process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME,
+						leafIntercomTarget: childIntercomTargets?.[0], intercomTarget: childIntercomTargets?.[0], ownerState: "live",
+						mode: resultMode, state: "running", agent: firstAgents[0], agents: flatAgents,
+						chainStepCount: eventChain.length, parallelGroups,
+						...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}),
+						...(initialTurnBudget ? { turnBudget: initialTurnBudget } : {}), startedAt: now, lastUpdate: now,
+					},
+				});
+			} catch (error) { console.error("Failed to emit nested async start event:", error); }
+		}
+		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
+			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
+			id, pid: spawnResult.pid, sessionId: ctx.currentSessionId, mode: resultMode,
+			agent: firstAgents[0], agents: flatAgents,
+			task: isParallelStep(eventFirstStep)
+				? eventFirstStep.parallel[0]?.task?.slice(0, 50)
+				: isDynamicParallelStep(eventFirstStep)
+					? eventFirstStep.parallel.task?.slice(0, 50)
+					: (eventFirstStep as SequentialStep).task?.slice(0, 50),
+			chain: eventChain.map((step) => isParallelStep(step) ? `[${step.parallel.map((task) => task.agent).join("+")}]` : isDynamicParallelStep(step) ? `expand:${step.parallel.agent}` : (step as SequentialStep).agent),
+			chainStepCount: eventChain.length, parallelGroups, workflowGraph, cwd: runnerCwd, asyncDir,
+			...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}),
+			...(initialTurnBudget ? { turnBudget: initialTurnBudget } : {}),
+			...(params.toolBudget ? { toolBudget: params.toolBudget } : {}),
+			nestedRoute,
+		});
+	}
+
 	const chainDesc = chain
 		.map((s) =>
 			isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : (s as SequentialStep).agent,

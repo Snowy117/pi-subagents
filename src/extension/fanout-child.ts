@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "../agents/agents.ts";
-import { getArtifactsDir } from "../shared/artifacts.ts";
+import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { SUBAGENT_CHILD_ENV, SUBAGENT_FANOUT_CHILD_ENV } from "../runs/shared/pi-args.ts";
 import { readNestedControlRequests, resolveNestedRouteFromEnv, writeNestedControlResult } from "../runs/shared/nested-events.ts";
@@ -11,7 +11,9 @@ import { deliverSubagentIntercomMessageEvent } from "../intercom/result-intercom
 import { resolveSubagentIntercomTarget } from "../intercom/intercom-bridge.ts";
 import { SubagentParams } from "./schemas.ts";
 import { loadConfig } from "./config.ts";
-import { type Details, type SubagentState } from "../shared/types.ts";
+import { RESULTS_DIR, TEMP_ROOT_DIR, type Details, type SubagentState } from "../shared/types.ts";
+import { createCompletionBroker } from "../runs/background/completion-broker.ts";
+import { createResultWatcher } from "../runs/background/result-watcher.ts";
 
 function getSubagentSessionRoot(parentSessionFile: string | null): string {
 	if (parentSessionFile) {
@@ -48,6 +50,7 @@ function createChildSafeState(): SubagentState {
 			schedule: () => false,
 			clear: () => {},
 		},
+		completionBroker: createCompletionBroker(),
 	};
 }
 
@@ -142,24 +145,38 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI): 
 
 	const config = loadConfig();
 	const state = createChildSafeState();
+	let nestedRoute: ReturnType<typeof resolveNestedRouteFromEnv>;
+	try { nestedRoute = resolveNestedRouteFromEnv(); } catch { nestedRoute = undefined; }
 	const executor = createSubagentExecutor({
 		pi,
 		state,
 		config,
 		asyncByDefault: config.asyncByDefault === true,
-		tempArtifactsDir: getArtifactsDir(null),
 		getSubagentSessionRoot,
 		expandTilde,
 		discoverAgents,
 		allowMutatingManagementActions: false,
+		...(nestedRoute ? { waitLifecycleRoots: {
+			asyncDirRoot: path.join(TEMP_ROOT_DIR, "nested-subagent-runs", nestedRoute.rootRunId),
+			resultsDir: path.join(RESULTS_DIR, "nested", nestedRoute.rootRunId),
+		} } : {}),
 	});
+	const resultWatcher = nestedRoute ? createResultWatcher(
+		pi,
+		state,
+		path.join(RESULTS_DIR, "nested", nestedRoute.rootRunId),
+		10 * 60 * 1000,
+	) : undefined;
+	if (nestedRoute) fs.mkdirSync(path.join(RESULTS_DIR, "nested", nestedRoute.rootRunId), { recursive: true });
+	resultWatcher?.startResultWatcher();
+	resultWatcher?.primeExistingResults();
 
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
 		description: [
 			"Delegate to subagents from child-safe fanout mode.",
-			"Allowed management/control actions: list, get, status, interrupt, resume, steer, append-step, doctor.",
+			"Allowed management/control actions include list, get, wait, status, interrupt, resume, steer, and doctor. Wait observes only nested runs authorized for this fanout root.",
 			"Agent config mutation actions (create, update, delete, eject, disable, enable, reset) are blocked in this mode.",
 		].join("\n"),
 		parameters: SubagentParams,
@@ -169,5 +186,15 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI): 
 	};
 
 	pi.registerTool(tool);
-	startNestedControlInboxListener(pi, state);
+	const controlTimer = startNestedControlInboxListener(pi, state);
+	pi.on("session_start", (_event, ctx) => {
+		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
+		state.completionBroker?.resetSession(state.currentSessionId);
+		resultWatcher?.primeExistingResults();
+	});
+	pi.on("session_shutdown", () => {
+		if (controlTimer) clearInterval(controlTimer);
+		resultWatcher?.stopResultWatcher();
+		state.completionBroker?.dispose();
+	});
 }

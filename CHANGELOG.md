@@ -2,13 +2,27 @@
 
 ## [Unreleased]
 
+### Breaking
+- Reduced the package-owned slash surface to `/subagents`. The former execution, fleet/doctor/cost, profile, and prompt-workflow slash adapters are no longer registered; use the `subagent` tool actions instead.
+- Removed all seven bundled prompt templates and publish an explicit empty `pi.prompts` list so Pi does not reload them through package-directory convention fallback.
+- Removed the opinionated `context-builder`, `oracle`, `planner`, `researcher`, `reviewer`, `scout`, and `worker` builtin definitions. A neutral, prompt-free `delegate` fallback is now the only bundled agent; user, project, and third-party package agents are unchanged.
+- Removed the standalone `wait` tool, `waitTool` config, and `PI_SUBAGENT_WAIT_TOOL_ENABLED`. Migrate `wait({ id?, all? })` to `subagent({ action: "wait", id?, all? })`; integrated waiting has no elapsed orchestration timeout.
+- Removed `tui.openSubagentsOnDown` and the default Down-arrow picker shortcut. Configure the no-default `subagents.openPicker` action in `~/.pi/agent/keybindings.json` with a key string, key array, or `[]`.
+
 ### Added
+- Added shared child-view exit routing for `/subagents exit|close`, Pi's live canonical `app.exit` binding, submitted `/quit`, and legacy `/exit`. Empty-editor semantics and custom/remapped/removed exit bindings follow the host keybinding manager; double-Ctrl+C remains host-owned.
+- Added a session-scoped completion broker that claims synchronous detached runs, caches rich normalized completions before delivery/event/unlink, and suppresses only the sync owner's duplicate completion turn.
+- Added integrated indefinite wait semantics for first/all/exact-or-unique-prefix targeting, actionable attention and supervisor requests, current-session snapshots, and abort-without-run-cancellation.
 - Child-conversation view parity with the main chat: the `/subagents` view resolves every reachable child — foreground resident, evicted-with-session (guarded `--session` reopen), running async (runner-side conversation bridge relaying prompts to the child and mirroring its stdout back), or finished async (reopen after the runner exits) — into one conversation channel, so host-editor mode (real Pi editor stays mounted and focused) now works for async children too, running or finished. The runner keeps a conversed-with async child resident past run finalize until the conversation heartbeat expires, then closes it gracefully.
 - Native-component rendering for the child conversation: the widget (and the degraded overlay) render user/assistant messages, toolCall ↔ toolResult cards paired by call id, custom messages (unknown types get an explicit `(generic fallback)` label), and bash executions with the same exported components the main view uses, seeded from transcript records and streamed live off the child's RPC events. Render settings follow Pi's own settings.json merge (global + project, project wins) for hideThinkingBlock, outputPad, terminal images, and markdown codeBlockIndent, with tool expansion state from the public `getToolsExpanded()` API. Prototype patches from pi-tool-display / pi-zentui on UserMessageComponent apply to the child surface too (opportunistic).
 - Full-height widget surface: the child conversation fills the chat area (parent chat pushed into terminal scrollback) while active, restoring the previous layout on exit.
 - App-level key routing while child mode is active (R1b, `subagents.childKeyRoute`, default true): Esc aborts the child stream (streaming only), Shift+Tab cycles child thinking level, Ctrl+P / Shift+Ctrl+P cycle child model, Ctrl+L opens the viewer-rendered model picker, Ctrl+O toggles tool output expansion, Ctrl+T toggles hidden thinking. Bindings resolve from defaults merged with `keybindings.json` remaps; editor-level keys are never intercepted; main-agent app keys are unavailable while child mode is active (documented).
 
 ### Changed
+- Unified public execution on the detached runner. `async:true` returns the launch receipt; default/`async:false` launches through the same path and waits for the exact generated run ID before reconstructing the full normal result.
+- Canonical execution mode is now based on count-expanded invocation cardinality. Exactly one invocation is `single`; count greater than one or multiple concrete tasks are `parallel` across labels, launch metadata, persisted status, indicators, and results.
+- The native child widget now contributes complete rendered history to root output and terminal scrollback, padding only short transcripts instead of slicing older rows to a moving viewport tail.
+- Every successful detached launch, including sync launch-plus-wait, emits the start lifecycle event immediately so the editor-top active-run indicator appears before completion.
 - The degraded full-screen overlay (`SteerViewComponent`) now renders its transcript through the same native assembler as the host-editor widget with an explicit “conversation continuity unavailable” header; the self-drawn Markdown/`▶ tool`/`✓ tool` message lines are removed. Steer, shift-tab thinking, scrolling, and Input behaviors are unchanged.
 - Updated the bundled `pi-subagents` skill so Fable mode is the default orchestration posture for complex work, and refreshed recent command/config guidance.
 - Documented `contact_supervisor` structured interview requests in the default child bridge instructions.

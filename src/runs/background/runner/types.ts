@@ -60,6 +60,7 @@ export interface SubagentRunConfig {
 
 export interface StepResult {
 	agent: string;
+	task: string;
 	output: string;
 	error?: string;
 	success: boolean;
@@ -85,6 +86,7 @@ export interface StepResult {
 	structuredOutput?: unknown;
 	structuredOutputPath?: string;
 	structuredOutputSchemaPath?: string;
+	usage: Usage;
 
 }
 

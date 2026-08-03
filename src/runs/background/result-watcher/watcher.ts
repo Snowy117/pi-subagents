@@ -98,6 +98,24 @@ export function createResultWatcher(
 					...(childNestedChildren ? { children: childNestedChildren } : {}),
 				};
 			}), nestedChildren);
+			const normalizedData: Record<string, unknown> = {
+				...data,
+				runId,
+				mode: data.mode ?? (resultChildren.length > 1 ? "parallel" : "single"),
+				...(nestedChildren?.length ? { nestedChildren } : {}),
+				...(Array.isArray(data.results) ? {
+					results: hasResultChildren ? normalizedChildren.map((child, index) => ({
+						...data.results![index], agent: child.agent, status: child.status, summary: child.summary,
+						index: child.index, artifactPath: child.artifactPath, sessionPath: child.sessionPath, children: child.children,
+					})) : [],
+				} : {}),
+			};
+			state.completionBroker?.cache({
+				runId,
+				sessionId: data.sessionId,
+				mode: normalizedData.mode as "single" | "parallel" | "chain",
+				data: normalizedData,
+			});
 
 			const intercomTarget = data.intercomTarget?.trim();
 			if (intercomTarget) {
@@ -119,25 +137,11 @@ export function createResultWatcher(
 				}
 			}
 
-			pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
-				...data,
-				runId,
-				...(nestedChildren?.length ? { nestedChildren } : {}),
-				...(Array.isArray(data.results) ? {
-					results: hasResultChildren
-						? normalizedChildren.map((child, index) => ({
-							...data.results![index],
-							agent: child.agent,
-							status: child.status,
-							summary: child.summary,
-							index: child.index,
-							artifactPath: child.artifactPath,
-							sessionPath: child.sessionPath,
-							children: child.children,
-						}))
-						: [],
-				} : {}),
-			});
+			try {
+				pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, normalizedData);
+			} finally {
+				state.completionBroker?.release(runId);
+			}
 			fsApi.unlinkSync(resultPath);
 		} catch (error) {
 			if (isNotFoundError(error)) return;

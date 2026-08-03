@@ -30,6 +30,7 @@ export interface AsyncStartedEvent {
 	timeoutMs?: number;
 	deadlineAt?: number;
 	turnBudget?: TurnBudgetState;
+	toolBudget?: ToolBudgetState;
 	nestedRoute?: NestedRouteInfo;
 }
 
@@ -249,4 +250,5 @@ export interface SubagentState {
 		schedule(file: string, delayMs?: number): boolean;
 		clear(): void;
 	};
+	completionBroker?: import("../../runs/background/completion-broker.ts").CompletionBroker;
 }

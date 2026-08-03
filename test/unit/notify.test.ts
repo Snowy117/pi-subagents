@@ -8,6 +8,7 @@ import registerSubagentNotify, {
 	type RegisterSubagentNotifyOptions,
 	type SubagentNotifyDetails,
 } from "../../src/runs/background/notify.ts";
+import { createCompletionBroker } from "../../src/runs/background/completion-broker.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/shared/types.ts";
 
 function createPi(currentSessionId = "session-1", registerOptions: RegisterSubagentNotifyOptions = {}) {
@@ -197,6 +198,29 @@ describe("registerSubagentNotify", () => {
 			summary: "Legacy cwd-scoped done",
 			timestamp: 101,
 			cwd: "/repo",
+		});
+
+		assert.deepEqual(sent, []);
+	});
+
+	it("suppresses the automatic completion turn while a synchronous caller owns the run", () => {
+		const events = new EventEmitter();
+		const sent: unknown[] = [];
+		const broker = createCompletionBroker({ now: () => 1 });
+		broker.claim({ runId: "sync-run", sessionId: "session-1", mode: "single", tasks: [{ agent: "delegate", task: "work" }] });
+		registerSubagentNotify({ events, sendMessage: (message: unknown) => sent.push(message) } as never, {
+			currentSessionId: "session-1",
+			completionBroker: broker,
+		}, { batchConfig: { enabled: false } });
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "sync-run",
+			runId: "sync-run",
+			agent: "delegate",
+			success: true,
+			summary: "Done",
+			timestamp: 1,
+			sessionId: "session-1",
 		});
 
 		assert.deepEqual(sent, []);

@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/typescript/quality-guidelines.md", "reason": "Primary implementation review checklist: forbidden patterns, tests, LSP, module placement, I/O and schema discipline."}
+{"file": ".trellis/spec/typescript/testing-guidelines.md", "reason": "Validate test tier placement, deterministic injected fakes, node:test/assert conventions, and proportional full-suite coverage."}
+{"file": ".trellis/spec/typescript/schema-and-type-safety.md", "reason": "Check runtime schema/type coherence after integrated wait, canonical mode, broker, and rich completion changes."}
+{"file": ".trellis/spec/typescript/error-and-io-guidelines.md", "reason": "Review keybindings/result-file reads, broker lifecycle, watcher ordering, error suppression, and filesystem race handling."}
+{"file": ".trellis/spec/typescript/subagent-interactive-control.md", "reason": "Acceptance contract for host editor, terminal actions, transcript history, detached runner/wait lifecycle, and indicator behavior after the spec update."}
+{"file": ".trellis/tasks/08-02-simplify-subagent-experience/research/commands-exit-keybindings.md", "reason": "Audit exact slash/prompt removal and the full exit/picker keybinding compatibility matrix against repository evidence."}
+{"file": ".trellis/tasks/08-02-simplify-subagent-experience/research/subagent-view-and-indicator.md", "reason": "Audit full-history behavior and producer-to-tracker/widget regression against the identified root cause and API ceiling."}
+{"file": ".trellis/tasks/08-02-simplify-subagent-experience/research/tool-wait-builtins-rendering.md", "reason": "Audit builtin surface, wait predicates, sync result race/notification ownership, and single/parallel propagation against the researched seams."}

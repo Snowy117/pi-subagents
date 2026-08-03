@@ -2,7 +2,7 @@
  * Widget factory for the child conversation surface (R2/R3).
  *
  * Implements pi's `ctx.ui.setWidget(key, componentFactory)` contract. The
- * widget renders the assembler's item tree tail into exactly
+ * widget renders the assembler's complete item tree with a minimum of
  * `max(1, terminal.rows - CHROME)` lines; shorter content is blank-padded so
  * the TUI's bottom-anchored viewport pushes the parent chat into scrollback —
  * visually the chat area IS the child conversation. Height is recomputed per
@@ -35,15 +35,14 @@ export function createChildConversationWidget(options: ChildConversationRenderOp
 		const widget: Component = {
 			render(width: number): string[] {
 				const rows = tui?.terminal?.rows ?? fallbackRows;
-				const total = Math.max(1, rows - chrome);
+				const minimum = Math.max(1, rows - chrome);
 				const header = statusLine();
 				const headerLines: string[] = [];
 				if (header) headerLines.push(theme.fg("accent", theme.bold(header)));
 				const content = assembler.container.render(width);
-				const tail = content.slice(-Math.max(0, total - headerLines.length));
-				const lines = [...headerLines, ...tail];
-				while (lines.length < total) lines.push("");
-				return lines.slice(0, total);
+				const lines = [...headerLines, ...content];
+				while (lines.length < minimum) lines.push("");
+				return lines;
 			},
 			invalidate() {
 				assembler.container.invalidate();

@@ -218,6 +218,7 @@ export function executeAsyncSingle(
 			asyncDir,
 			...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}),
 			...(initialTurnBudget ? { turnBudget: initialTurnBudget } : {}),
+			...(params.toolBudget ? { toolBudget: params.toolBudget } : {}),
 			nestedRoute,
 		});
 	}

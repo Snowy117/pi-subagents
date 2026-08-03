@@ -235,7 +235,11 @@ async function runRpc(response, args) {
 				return;
 			}
 			await writeJsonlLine({ id: command.id, type: "response", command: command.type, success: true });
-			for (const entry of entries ?? []) {
+			if (typeof response.delay === "number" && response.delay > 0) {
+				await new Promise((resolve) => setTimeout(resolve, response.delay));
+			}
+			const writeEntries = async (batch) => {
+				for (const entry of batch ?? []) {
 				if (entry?.type === "message_end") {
 					const textPart = entry.message?.content?.find?.((part) => part?.type === "text");
 					if (textPart && typeof textPart.text === "string") {
@@ -243,8 +247,20 @@ async function runRpc(response, args) {
 					}
 				}
 				await writeJsonlLine(entry);
+				}
+			};
+			if (Array.isArray(response.steps) && response.steps.length > 0) {
+				for (const step of response.steps) {
+					if (typeof step?.delay === "number" && step.delay > 0) {
+						await new Promise((resolve) => setTimeout(resolve, step.delay));
+					}
+					await writeEntries(step?.jsonl);
+					if (typeof step?.stderr === "string" && step.stderr.length > 0) process.stderr.write(step.stderr);
+				}
+			} else {
+				await writeEntries(entries);
 			}
-			if (entries.length === 0 && plainOutput !== undefined) {
+			if (entries.length === 0 && !(Array.isArray(response.steps) && response.steps.length > 0) && plainOutput !== undefined) {
 				await writeJsonlLine(defaultAssistantMessage(withAcceptanceReport(plainOutput, args)));
 			}
 			if (typeof response.keepAliveAfterFinalMessageMs === "number" && response.keepAliveAfterFinalMessageMs > 0) {

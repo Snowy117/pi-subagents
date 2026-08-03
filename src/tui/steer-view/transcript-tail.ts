@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LIVE_TRANSCRIPTS_DIR } from "../../shared/live-transcript.ts";
-import { readContainedTextTail, readSessionTranscriptTail } from "../../runs/background/fleet-view/transcript-tail.ts";
+import { readContainedTextComplete, readContainedTextTail, readSessionTranscriptComplete, readSessionTranscriptTail } from "../../runs/background/fleet-view/transcript-tail.ts";
 import type { SteerViewTarget } from "./target-model.ts";
 
 export interface SteerTranscriptRecord {
@@ -152,13 +152,18 @@ export function trustedRootsForTarget(target: SteerViewTarget): string[] {
 
 export function readTranscriptFallback(target: SteerViewTarget, maxLines = 80): TranscriptTailPoll {
 	const roots = trustedRootsForTarget(target);
+	const complete = maxLines === Number.POSITIVE_INFINITY;
 	if (target.outputFile) {
-		const output = readContainedTextTail(target.outputFile, maxLines, roots, "child output");
+		const output = complete
+			? readContainedTextComplete(target.outputFile, roots, "child output")
+			: readContainedTextTail(target.outputFile, maxLines, roots, "child output");
 		if (output.lines.length > 0) return { records: output.lines.map((text) => ({ recordType: "fallback", ts: 0, text })), reset: true, warnings: output.error ? [output.error] : [] };
 	}
 	if (target.recentOutput?.trim()) return { records: [{ recordType: "fallback", ts: 0, text: target.recentOutput }], reset: true, warnings: [] };
 	if (target.sessionFile) {
-		const session = readSessionTranscriptTail(target.sessionFile, maxLines, roots);
+		const session = complete
+			? readSessionTranscriptComplete(target.sessionFile, roots)
+			: readSessionTranscriptTail(target.sessionFile, maxLines, roots);
 		return { records: session.lines.map((text) => ({ recordType: "fallback", ts: 0, text })), reset: true, warnings: session.warnings };
 	}
 	return { records: [], reset: false, warnings: [] };

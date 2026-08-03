@@ -68,16 +68,18 @@ export function terminalState(state: ScheduledRunState): boolean {
 	return state === "fired" || state === "canceled" || state === "missed" || state === "failed";
 }
 
+function scheduledInvocationCount(params: SubagentParamsLike): number {
+	return (params.tasks ?? []).reduce((total, task) => total + (task.count ?? 1), 0);
+}
+
 export function jobMode(params: SubagentParamsLike): Details["mode"] {
-	if ((params.chain?.length ?? 0) > 0) return "chain";
-	if ((params.tasks?.length ?? 0) > 0) return "parallel";
-	return "single";
+	return scheduledInvocationCount(params) > 1 ? "parallel" : "single";
 }
 
 export function describeScheduledTarget(params: SubagentParamsLike): string {
-	if ((params.chain?.length ?? 0) > 0) return `chain (${params.chain!.length})`;
-	if ((params.tasks?.length ?? 0) > 0) return `parallel (${params.tasks!.length})`;
-	return params.agent ? `agent ${params.agent}` : "subagent run";
+	const count = scheduledInvocationCount(params);
+	if (count > 1) return `parallel (${count})`;
+	return params.tasks?.[0] ? `agent ${params.tasks[0].agent}` : "subagent run";
 }
 
 export function textResult(text: string, isError = false): AgentToolResult<Details> {
@@ -99,18 +101,18 @@ export function resolveJobById(jobs: ScheduledRunJob[], requestedId: string): Sc
 
 export function sanitizeScheduledParams(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: string } {
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
-	const hasSingle = !hasTasks && Boolean(params.agent);
-	if (!hasTasks && !hasSingle) {
-		return { error: "action='schedule' requires exactly one execution mode: agent or tasks." };
-	}
+	if (!hasTasks) return { error: "action='schedule' requires tasks with at least one entry." };
 	if (!params.schedule?.trim()) return { error: "action='schedule' requires schedule, such as '+10m' or a future ISO timestamp." };
 	if (params.context === "fork") return { error: "Scheduled subagent runs require fresh context. Forked parent-session context is not safe at fire time." };
 	if (params.async === false) return { error: "Scheduled subagent runs are always async; omit async or set async: true." };
 
 	const {
 		action: _action,
+		all: _all,
 		id: _id,
 		index: _index,
+		view: _view,
+		lines: _lines,
 		message: _message,
 		config: _config,
 		schedule: _schedule,

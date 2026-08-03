@@ -1,6 +1,5 @@
 /** async-resume (split from subagent-executor.ts). Internal-only. */
 
-import { normalizeSkillInput } from "../../../agents/skills.ts";
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget } from "../../../intercom/intercom-bridge.ts";
 import { deliverSubagentIntercomMessageEvent } from "../../../intercom/result-intercom.ts";
 import { getArtifactsDir } from "../../../shared/artifacts.ts";
@@ -14,7 +13,6 @@ import { resolveControlConfig } from "../../shared/subagent-control.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import { resolveExplicitContextPolicy } from "./budget-resolution.ts";
 import { nestedResolutionScopeForExecutor } from "./foreground-state.ts";
 import { resolveNestedResumeTarget, resumeLiveNestedRun } from "./nested-runs.ts";
 import { resolveSingleRunOutputBaseDir } from "./parallel-helpers.ts";
@@ -29,7 +27,7 @@ export async function resumeAsyncRun(input: {
 	ctx: ExtensionContext;
 	deps: ExecutorDeps;
 }): Promise<AgentToolResult<Details>> {
-	const followUp = (input.params.message ?? input.params.task ?? "").trim();
+	const followUp = (input.params.message ?? "").trim();
 	if (!followUp) {
 		return {
 			content: [{ type: "text", text: "action='resume' requires message." }],
@@ -41,7 +39,7 @@ export async function resumeAsyncRun(input: {
 	let target: ResumeSourceTarget;
 	const parentSessionFile = input.ctx.sessionManager.getSessionFile() ?? null;
 	try {
-		const requestedId = input.params.id ?? input.params.runId;
+		const requestedId = input.params.id;
 		let resolved: ResolvedSubagentRunId | undefined;
 		try {
 			resolved = requestedId ? resolveSubagentRunId(requestedId, { state: input.deps.state, nested: nestedResolutionScopeForExecutor(input.deps) }) : undefined;
@@ -151,20 +149,19 @@ export async function resumeAsyncRun(input: {
 			modelScope,
 		},
 		cwd: effectiveCwd,
-		maxOutput: input.params.maxOutput,
 		artifactsDir,
 		artifactConfig,
 		shareEnabled: false,
 		sessionRoot: input.deps.getSubagentSessionRoot(parentSessionFile),
 		sessionFile: target.sessionFile,
-		modelOverride: input.params.model ?? target.model,
-		thinkingOverride: input.params.model ? undefined : target.thinking,
+		modelOverride: target.model,
+		thinkingOverride: target.thinking,
 		outputBaseDir: resolveSingleRunOutputBaseDir(input.deps, artifactsDir, runId),
 		maxSubagentDepth: resolveCurrentMaxSubagentDepth(input.deps.config.maxSubagentDepth),
 		worktreeSetupHook: input.deps.config.worktreeSetupHook,
 		worktreeSetupHookTimeoutMs: input.deps.config.worktreeSetupHookTimeoutMs,
 		worktreeBaseDir: input.deps.config.worktreeBaseDir,
-		controlConfig: resolveControlConfig(input.deps.config.control, input.params.control),
+		controlConfig: resolveControlConfig(input.deps.config.control),
 		controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 		childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 		availableModels,

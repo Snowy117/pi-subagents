@@ -4,7 +4,7 @@
  */
 
 import type { ResolvedTurnBudget, ResolvedToolBudget, TurnBudgetConfig, ToolBudgetConfig } from "./budget-types.ts";
-import type { ControlEvent, ResolvedControlConfig, ControlConfig, CompletionBatchConfig, WaitToolConfig } from "./control-types.ts";
+import type { ControlEvent, ResolvedControlConfig, ControlConfig, CompletionBatchConfig } from "./control-types.ts";
 import type { IntercomEventBus, Details, SingleResult, MaxOutputConfig, OutputMode } from "./result-types.ts";
 import type { NestedRouteInfo } from "./async-types.ts";
 import type { AgentConfig } from "../../agents/agents.ts";
@@ -110,16 +110,11 @@ export interface ScheduledRunsConfig {
 	maxPending?: number;
 }
 
-export interface TuiConfig {
-	openSubagentsOnDown: boolean;
-}
-
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to full. */
 	toolDescriptionMode?: ToolDescriptionMode;
 	forceTopLevelAsync?: boolean;
-	waitTool?: WaitToolConfig;
 	defaultSessionDir?: string;
 	singleRunOutputBaseDir?: string;
 	maxSubagentDepth?: number;
@@ -154,5 +149,4 @@ export interface ExtensionConfig {
 	intercomBridge?: IntercomBridgeConfig;
 	proactiveSkillSubagents?: ProactiveSkillSubagentsConfig | false;
 	scheduledRuns?: ScheduledRunsConfig;
-	tui?: Partial<TuiConfig>;
 }

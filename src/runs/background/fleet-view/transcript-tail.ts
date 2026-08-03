@@ -93,6 +93,27 @@ export function readContainedTextTail(filePath: string, maxLines: number, truste
 	return readTextTail(resolvedPath, maxLines);
 }
 
+export function readContainedTextComplete(filePath: string, trustedRoots: string[], label: string): TextTailResult {
+	if (trustedRoots.length === 0) return { path: filePath, lines: [], truncated: false, error: `Refusing to read ${label} transcript path without a trusted root: ${filePath}` };
+	const resolvedPath = path.resolve(filePath);
+	if (!trustedRoots.some((root) => pathWithin(root, resolvedPath))) return { path: filePath, lines: [], truncated: false, error: `Refusing to read ${label} transcript path outside trusted roots: ${filePath}` };
+	try {
+		const lstat = fs.lstatSync(resolvedPath);
+		if (lstat.isSymbolicLink()) return { path: filePath, lines: [], truncated: false, error: `Refusing to read symlink ${label} transcript path: ${filePath}` };
+		if (!lstat.isFile()) return { path: filePath, lines: [], truncated: false, error: `Refusing to read non-file ${label} transcript path: ${filePath}` };
+		const realPath = fs.realpathSync(resolvedPath);
+		const realRoots = trustedRoots.filter((root) => fs.existsSync(root)).map((root) => fs.realpathSync(root));
+		if (!realRoots.some((root) => pathWithin(root, realPath))) return { path: filePath, lines: [], truncated: false, error: `Refusing to read ${label} transcript path outside trusted roots: ${filePath}` };
+		const content = fs.readFileSync(realPath, "utf8");
+		const lines = content.split(/\r?\n/);
+		if (lines.at(-1) === "") lines.pop();
+		return { path: realPath, lines, truncated: false };
+	} catch (error) {
+		if (isNotFoundError(error)) return { path: filePath, lines: [], truncated: false };
+		return { path: filePath, lines: [], truncated: false, error: getErrorMessage(error) };
+	}
+}
+
 function stringifyJsonPreview(value: unknown, maxLength = 240): string {
 	let raw: string;
 	if (typeof value === "string") raw = value;
@@ -148,4 +169,20 @@ export function readSessionTranscriptTail(sessionFile: string, maxLines: number,
 	}
 	if (malformed > 0) warnings.push(`Skipped ${malformed} malformed session tail line${malformed === 1 ? "" : "s"}.`);
 	return { lines: lines.slice(-maxLines), warnings };
+}
+
+export function readSessionTranscriptComplete(sessionFile: string, trustedRoots: string[]): { lines: string[]; warnings: string[] } {
+	const complete = readContainedTextComplete(sessionFile, trustedRoots, "session");
+	const warnings: string[] = complete.error ? [`Session read failed for ${sessionFile}: ${complete.error}`] : [];
+	const lines: string[] = [];
+	let malformed = 0;
+	for (const line of complete.lines) {
+		if (!line.trim()) continue;
+		try {
+			const messageLine = sessionMessageLine(JSON.parse(line) as unknown);
+			if (messageLine) lines.push(messageLine);
+		} catch { malformed++; }
+	}
+	if (malformed > 0) warnings.push(`Skipped ${malformed} malformed session line${malformed === 1 ? "" : "s"}.`);
+	return { lines, warnings };
 }

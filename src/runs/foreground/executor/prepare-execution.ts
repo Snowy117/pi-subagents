@@ -1,17 +1,11 @@
-/** prepare-execution (split from subagent-executor.ts; internal-only).
- *  Extracted from createSubagentExecutor so the orchestrator stays under budget.
- *  Resolves/validates effective params, discovers agents, builds the session
- *  tree and ExecutionContextData + foreground control. On failure returns the
- *  early-exit AgentToolResult the inlined code produced. */
-
 import { type AgentConfig } from "../../../agents/agents.ts";
-import { type IntercomBridgeState, applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget } from "../../../intercom/intercom-bridge.ts";
+import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget } from "../../../intercom/intercom-bridge.ts";
 import { getArtifactsDir } from "../../../shared/artifacts.ts";
 import { createForkContextResolver } from "../../../shared/fork-context.ts";
 import { resolveCurrentSessionId } from "../../../shared/session-identity.ts";
-import { type ArtifactConfig, type Details, DEFAULT_ARTIFACT_CONFIG, checkSubagentDepth } from "../../../shared/types.ts";
+import { type ArtifactConfig, type Details, DEFAULT_ARTIFACT_CONFIG, RESULTS_DIR, TEMP_ROOT_DIR, checkSubagentDepth } from "../../../shared/types.ts";
 import { applyForceTopLevelAsyncOverride } from "../../background/top-level-async.ts";
-import { createNestedRoute, resolveInheritedNestedRouteFromEnv, resolveNestedParentAddressFromEnv } from "../../shared/nested-events.ts";
+import { createNestedRoute, resolveInheritedNestedRouteFromEnv, resolveNestedRouteFromEnv } from "../../shared/nested-events.ts";
 import { resolveControlConfig } from "../../shared/subagent-control.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -20,9 +14,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { normalizeRepeatedParallelCounts, resolveAgentDefaultContextPolicy, shouldForkAgent } from "./budget-resolution.ts";
 import { countRequestedSubagentSpawns, reserveSubagentSpawns } from "./foreground-state.ts";
-import { preflightForkSessionsForStaticTasks, toExecutionErrorResult, withForkContext } from "./fork-helpers.ts";
+import { preflightForkSessionsForStaticTasks, toExecutionErrorResult } from "./fork-helpers.ts";
 import { validateExecutionInput } from "./validation.ts";
 import { type ExecutionContextData, type ExecutorDeps, type SubagentParamsLike } from "./types.ts";
+import { modeForConcreteInvocationCount } from "./mode-helpers.ts";
 
 
 export function prepareExecution(input: {
@@ -30,21 +25,11 @@ export function prepareExecution(input: {
 	ctx: ExtensionContext;
 	params: SubagentParamsLike;
 	signal: AbortSignal;
-	onUpdate: ((r: AgentToolResult<Details>) => void) | undefined;
 }): (AgentToolResult<Details> & { isError?: boolean }) | {
 	execData: ExecutionContextData;
-	foregroundControl: { startedAt: number } | undefined;
-	inheritedNestedRoute: ReturnType<typeof resolveInheritedNestedRouteFromEnv>;
-	nestedParentAddress: ReturnType<typeof resolveNestedParentAddressFromEnv>;
-	runId: string;
-	hasTasks: boolean;
-	hasChain: false;
-	hasSingle: false;
-	foregroundMode: "single" | "parallel";
 	effectiveParams: SubagentParamsLike;
-	intercomBridge: IntercomBridgeState;
 } {
-	const { deps, ctx, params, signal, onUpdate } = input;
+	const { deps, ctx, params, signal } = input;
 	const { blocked, depth, maxDepth } = checkSubagentDepth(deps.config.maxSubagentDepth);
 	if (blocked) {
 		return {
@@ -71,6 +56,25 @@ export function prepareExecution(input: {
 		depth,
 		deps.config.forceTopLevelAsync === true,
 	);
+	let inheritedNestedRoute: ReturnType<typeof resolveNestedRouteFromEnv>;
+	if (deps.allowMutatingManagementActions === false) {
+		try {
+			inheritedNestedRoute = resolveNestedRouteFromEnv();
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			return toExecutionErrorResult(effectiveParams, new Error(`Subagent execution is unavailable in child-safe fanout mode because the inherited lifecycle route is invalid: ${reason}`));
+		}
+		if (!inheritedNestedRoute || !deps.waitLifecycleRoots) {
+			return toExecutionErrorResult(effectiveParams, new Error("Subagent execution is unavailable in child-safe fanout mode because no authorized nested lifecycle root was resolved."));
+		}
+		const expectedAsyncRoot = path.resolve(TEMP_ROOT_DIR, "nested-subagent-runs", inheritedNestedRoute.rootRunId);
+		const expectedResultsDir = path.resolve(RESULTS_DIR, "nested", inheritedNestedRoute.rootRunId);
+		if (path.resolve(deps.waitLifecycleRoots.asyncDirRoot) !== expectedAsyncRoot || path.resolve(deps.waitLifecycleRoots.resultsDir) !== expectedResultsDir) {
+			return toExecutionErrorResult(effectiveParams, new Error("Subagent execution is unavailable in child-safe fanout mode because its authorized lifecycle roots do not match the inherited nested route."));
+		}
+	} else {
+		inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
+	}
 	const effectiveCwd = ctx.cwd;
 	const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 	deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
@@ -89,10 +93,7 @@ export function prepareExecution(input: {
 		? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
 		: discoveredAgents;
 	const runId = randomUUID().slice(0, 8);
-	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
-	const nestedParentAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
 	const nestedRoute = inheritedNestedRoute ?? createNestedRoute(runId);
-	const hasTasks = (effectiveParams.tasks?.length ?? 0) > 0;
 
 	const validationError = validateExecutionInput(
 		effectiveParams,
@@ -139,19 +140,14 @@ export function prepareExecution(input: {
 		shouldForkAgent(contextPolicy, agentName) ? forkThinkingOverrideForIndex(idx) : undefined;
 	const childSessionFileForTask = (agentName: string, idx?: number) =>
 		forkSessionFileForTask(agentName, idx) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
-	const childSessionFileForIndex = (idx?: number) =>
-		path.join(sessionDirForIndex(idx), "session.jsonl");
 	try {
 		preflightForkSessionsForStaticTasks(effectiveParams, contextPolicy, forkSessionFileForTask);
 	} catch (error) {
 		return toExecutionErrorResult(effectiveParams, error);
 	}
 
-	const onUpdateWithContext = onUpdate
-		? (r: AgentToolResult<Details>) => onUpdate(withForkContext(r, effectiveParams.context))
-		: undefined;
-
-	const foregroundMode: "single" | "parallel" = hasTasks ? "parallel" : "single";
+	const concreteCount = effectiveParams.tasks?.length ?? 0;
+	const foregroundMode = modeForConcreteInvocationCount(concreteCount);
 	const spawnLimitError = reserveSubagentSpawns({
 		state: deps.state,
 		config: deps.config,
@@ -166,17 +162,15 @@ export function prepareExecution(input: {
 		effectiveCwd,
 		ctx,
 		signal,
-		onUpdate: onUpdateWithContext,
 		agents,
 		runId,
 		sessionRoot,
-		sessionDirForIndex,
-		sessionFileForIndex: childSessionFileForIndex,
 		sessionFileForTask: childSessionFileForTask,
 		thinkingOverrideForTask: forkThinkingOverrideForTask,
 		artifactConfig,
 		artifactsDir,
 		effectiveAsync,
+		executionMode: foregroundMode,
 		controlConfig,
 		intercomBridge,
 		nestedRoute,
@@ -184,23 +178,5 @@ export function prepareExecution(input: {
 		modelScope,
 	};
 
-	const foregroundControl = effectiveAsync
-		? undefined
-		: {
-			runId,
-			mode: foregroundMode,
-			startedAt: Date.now(),
-			updatedAt: Date.now(),
-			currentAgent: undefined,
-			currentIndex: undefined,
-			currentActivityState: undefined,
-			nestedRoute,
-			interrupt: undefined,
-		};
-	if (foregroundControl) {
-		deps.state.foregroundControls.set(runId, foregroundControl);
-		deps.state.lastForegroundControlId = runId;
-	}
-
-	return { execData, foregroundControl, inheritedNestedRoute, nestedParentAddress, runId, hasTasks, hasChain: false as const, hasSingle: false as const, foregroundMode, effectiveParams, intercomBridge };
+	return { execData, effectiveParams };
 }

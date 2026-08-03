@@ -17,7 +17,6 @@ import {
 /** States that mean a run is still in flight (not yet resolved). */
 const ACTIVE_STATES: ReadonlyArray<AsyncRunSummary["state"]> = ["queued", "running"];
 
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_POLL_INTERVAL_MS = 250;
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
@@ -31,8 +30,6 @@ export interface WaitParams {
 	 * targets a single run.
 	 */
 	all?: boolean;
-	/** Give up after this many milliseconds. Defaults to 30 minutes. */
-	timeoutMs?: number;
 }
 
 /** Minimal event-bus surface wait subscribes to (matches pi.events). */
@@ -48,7 +45,6 @@ export interface WaitDeps {
 	now?: () => number;
 	pollIntervalMs?: number;
 	/** False makes the tool return immediately without blocking active async runs. */
-	enabled?: boolean;
 	/** Injectable sleep for tests. */
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	/**
@@ -62,7 +58,7 @@ export interface WaitDeps {
 	getActionableSupervisorRequests?: () => ReadonlyArray<SupervisorAttentionRequest>;
 }
 
-export { DEFAULT_POLL_INTERVAL_MS, DEFAULT_TIMEOUT_MS, MIN_POLL_INTERVAL_MS };
+export { DEFAULT_POLL_INTERVAL_MS, MIN_POLL_INTERVAL_MS };
 
 /** Bus channels that indicate a run changed state or needs attention. */
 const WAKE_CHANNELS = [

@@ -181,7 +181,9 @@ export function buildSingleStepResult(opts: {
 	} = opts;
 	return {
 		agent: step.agent,
+		task: step.task,
 		output: outputForSummary,
+		usage: finalResult?.usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
 		exitCode: effectiveFinalExitCode,
 		error: effectiveFinalError,
 		sessionFile: step.sessionFile,

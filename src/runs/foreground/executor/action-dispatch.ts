@@ -1,24 +1,17 @@
-/** action-dispatch (split from subagent-executor.ts; internal-only).
- *  Extracted from createSubagentExecutor's `if (action) {...}` block so the
- *  orchestrator stays concise. Pure move: returns the same AgentToolResult the
- *  inlined block returned, or undefined when no action. Async because some
- *  action handlers (resume / append-step / interrupt) are async. */
-
 import { handleManagementAction } from "../../../agents/agent-management.ts";
 import { buildDoctorReport } from "../../../extension/doctor.ts";
 import { resolveIntercomSessionTarget } from "../../../intercom/intercom-bridge.ts";
-import { type Details, ASYNC_DIR, RESULTS_DIR, SUBAGENT_ACTIONS } from "../../../shared/types.ts";
-import { resolveAsyncRunLocation } from "../../background/async-resume.ts";
+import { type Details, SUBAGENT_ACTIONS } from "../../../shared/types.ts";
 import { type ResolvedSubagentRunId, resolveSubagentRunId } from "../../background/run-id-resolver.ts";
 import { inspectSubagentStatus } from "../../background/run-status.ts";
 import { type AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as path from "node:path";
 import { getForegroundControl, foregroundStatusResult, nestedResolutionScopeForExecutor, trustedSessionRootsForStatus } from "./foreground-state.ts";
 import { interruptAsyncRun, steerAsyncRun, steerForegroundRun } from "./interrupt-steer.ts";
 import { interruptNestedRun, steerNestedRun } from "./nested-runs.ts";
 import { resumeAsyncRun } from "./async-resume.ts";
 import { type ExecutorDeps, type SubagentParamsLike, MUTATING_MANAGEMENT_ACTIONS } from "./types.ts";
+import { waitForSubagents } from "../../background/wait.ts";
 
 
 export async function dispatchAction(input: {
@@ -26,10 +19,23 @@ export async function dispatchAction(input: {
 	ctx: ExtensionContext;
 	params: SubagentParamsLike;
 	requestCwd: string;
+	signal?: AbortSignal;
 }): Promise<(AgentToolResult<Details> & { isError?: boolean }) | undefined> {
 	const action = input.params.action;
 	if (!action) return undefined;
 	const { deps, ctx, params, requestCwd } = input;
+	if (action === "wait") {
+		if (!deps.waitLifecycleRoots) {
+			return { content: [{ type: "text", text: "Waiting is unavailable in this subagent context because no authorized lifecycle root was resolved." }], isError: true, details: { mode: "management", results: [] } };
+		}
+		return waitForSubagents({ id: params.id, all: params.all }, input.signal, {
+			state: deps.state,
+			events: deps.pi.events,
+			asyncDirRoot: deps.waitLifecycleRoots.asyncDirRoot,
+			resultsDir: deps.waitLifecycleRoots.resultsDir,
+			getActionableSupervisorRequests: deps.getActionableSupervisorRequests,
+		});
+	}
 	if (action === "doctor") {
 		let currentSessionFile: string | null = null;
 		let currentSessionId = deps.state.currentSessionId;
@@ -54,7 +60,6 @@ export async function dispatchAction(input: {
 					config: deps.config,
 					state: deps.state,
 					context: params.context,
-					requestedSessionDir: params.sessionDir,
 					currentSessionFile,
 					currentSessionId,
 					orchestratorTarget,
@@ -66,7 +71,7 @@ export async function dispatchAction(input: {
 		};
 	}
 	if (action === "status") {
-		const targetRunId = params.id ?? params.runId;
+		const targetRunId = params.id;
 		const nestedScope = nestedResolutionScopeForExecutor(deps);
 		const sessionRoots = trustedSessionRootsForStatus(ctx, deps);
 		if (params.view === "fleet") {
@@ -107,20 +112,10 @@ export async function dispatchAction(input: {
 		return resumeAsyncRun({ params: params, requestCwd, ctx, deps });
 	}
 	if (action === "steer") {
-		const message = (params.message ?? params.task ?? "").trim();
+		const message = (params.message ?? "").trim();
 		if (!message) return { content: [{ type: "text", text: "action='steer' requires message." }], isError: true, details: { mode: "management", results: [] } };
-		const targetRunId = params.runId ?? params.id;
-		if (params.dir) {
-			try {
-				const location = resolveAsyncRunLocation(params, ASYNC_DIR, RESULTS_DIR);
-				const runId = location.resolvedId ?? targetRunId ?? path.basename(location.asyncDir ?? params.dir);
-				return steerAsyncRun({ state: deps.state, runId, message, index: params.index, kill: deps.kill, location });
-			} catch (error) {
-				const text = error instanceof Error ? error.message : String(error);
-				return { content: [{ type: "text", text }], isError: true, details: { mode: "management", results: [] } };
-			}
-		}
-		if (!targetRunId) return { content: [{ type: "text", text: "action='steer' requires id or dir." }], isError: true, details: { mode: "management", results: [] } };
+		const targetRunId = params.id;
+		if (!targetRunId) return { content: [{ type: "text", text: "action='steer' requires id." }], isError: true, details: { mode: "management", results: [] } };
 		let resolved: ResolvedSubagentRunId | undefined;
 		try {
 			resolved = resolveSubagentRunId(targetRunId, { state: deps.state, nested: nestedResolutionScopeForExecutor(deps) });
@@ -144,7 +139,7 @@ export async function dispatchAction(input: {
 		return deps.handleScheduledRunAction(params, ctx);
 	}
 	if (action === "interrupt") {
-		const targetRunId = params.runId ?? params.id;
+		const targetRunId = params.id;
 		let resolved: ResolvedSubagentRunId | undefined;
 		if (targetRunId) {
 			try {

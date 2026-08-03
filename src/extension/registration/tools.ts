@@ -2,11 +2,9 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { SubagentParamsLike } from "../../runs/foreground/subagent-executor.ts";
-import type { SupervisorAttentionRequest } from "../../intercom/native-supervisor-channel/types.ts";
-import { type ResolvedWaitToolConfig, waitForSubagents } from "../../runs/background/wait.ts";
 import { type Details, type ExtensionConfig, type SubagentState } from "../../shared/types.ts";
 import { renderSubagentResult, clearLegacyResultAnimationTimer } from "../../tui/render.ts";
-import { SubagentParams, WaitParams } from "../schemas.ts";
+import { SubagentParams } from "../schemas.ts";
 import { buildSubagentToolDescription } from "../tool-description.ts";
 
 type ExecuteFn = (
@@ -19,11 +17,13 @@ type ExecuteFn = (
 
 interface RegisterSubagentToolsOptions {
 	config: ExtensionConfig;
-	waitToolConfig: ResolvedWaitToolConfig;
-	state: SubagentState;
-	events: ExtensionAPI["events"];
 	execute: ExecuteFn;
-	getActionableSupervisorRequests: () => ReadonlyArray<SupervisorAttentionRequest>;
+}
+
+export function resolveCallerDetachPolicy(args: { async?: boolean }, config: Pick<ExtensionConfig, "asyncByDefault" | "forceTopLevelAsync">): boolean {
+	if (config.forceTopLevelAsync === true) return true;
+	if (args.async !== undefined) return args.async === true;
+	return config.asyncByDefault === true;
 }
 
 // Drives the inline running-indicator braille animation for foreground subagent
@@ -51,7 +51,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 }
 
 export function registerSubagentTools(pi: ExtensionAPI, options: RegisterSubagentToolsOptions): void {
-	const { config, waitToolConfig, state, events, execute, getActionableSupervisorRequests } = options;
+	const { config, execute } = options;
 
 	function effectiveParallelTaskCount(tasks: Array<{ count?: unknown }> | undefined): number {
 		if (!tasks || tasks.length === 0) return 0;
@@ -73,23 +73,24 @@ export function registerSubagentTools(pi: ExtensionAPI, options: RegisterSubagen
 
 		renderCall(args, theme) {
 			if (args.action) {
-				const target = args.agent || "";
+				const target = args.id || "";
 				return new Text(
 					`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
 					0, 0,
 				);
 			}
-			const isParallel = (args.tasks?.length ?? 0) > 0;
 			const parallelCount = effectiveParallelTaskCount(args.tasks as Array<{ count?: unknown }> | undefined);
-			const asyncLabel = args.async === true ? theme.fg("warning", " [async]") : "";
+			const isParallel = parallelCount > 1;
+			const asyncLabel = resolveCallerDetachPolicy(args, config) ? theme.fg("warning", " [async]") : "";
 			if (isParallel)
 				return new Text(
 					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${parallelCount})${asyncLabel}`,
 					0,
 					0,
 				);
+			const agent = args.tasks?.[0]?.agent || "delegate";
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", agent)}${asyncLabel}`,
 				0,
 				0,
 			);
@@ -108,24 +109,4 @@ export function registerSubagentTools(pi: ExtensionAPI, options: RegisterSubagen
 	};
 
 	pi.registerTool(tool);
-
-	const waitTool: ToolDefinition<typeof WaitParams, Details> = {
-		name: "wait",
-		label: "Wait",
-		description: `Block until background (async) subagent runs started in this session finish, then return.
-
-Use this after launching async subagents when you have no independent work left and must not end your turn — for example inside a skill that has to run to completion, or any non-interactive run (\`pi -p ...\`) where the whole task is a single turn and ending it would abandon the still-running children.
-
-• { } — return as soon as the FIRST active run finishes (default). Ideal for a rolling fleet: launch N, wait, spawn a replacement for the one that finished, wait again — keeping N in flight.
-• { all: true } — block until EVERY active run in this session is finished.
-• { id: "..." } — wait for one specific run (id or prefix) to finish.
-• { timeoutMs: 600000 } — stop waiting after N ms (the runs keep going regardless; default 30 min)
-
-wait also returns when a run needs attention or a blocking supervisor decision/interview request is pending. The summary identifies the run/request and the native or pi-intercom reply path. This mode-independent predicate wakes on completion, control, and supervisor events, with persistent-state reconciliation and a poll fallback; non-blocking progress updates do not terminate wait.${waitToolConfig.enabled ? "" : "\n\nConfigured behavior: wait is disabled by config.waitTool or PI_SUBAGENT_WAIT_TOOL_ENABLED and returns immediately without blocking."}`,
-		parameters: WaitParams,
-		execute(_id, params, signal, _onUpdate, _ctx) {
-			return waitForSubagents(params, signal, { state, events, enabled: waitToolConfig.enabled, getActionableSupervisorRequests });
-		},
-	};
-	pi.registerTool(waitTool);
 }

@@ -1,21 +1,8 @@
-/**
- * Subagent Tool
- *
- * Full-featured subagent with sync and async modes.
- * - Sync (default): Streams output, renders markdown, tracks usage
- * - Async: Background execution, emits events when done
- *
- * Modes: single (agent + task), parallel (tasks[]), chain (chain[] with {previous})
- * Toggle: async parameter (default: false, configurable via config.json)
- *
- * Config file: ~/.pi/agent/extensions/subagent/config.json
- *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
- */
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "../agents/agents.ts";
-import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
+import { cleanupAllArtifactDirs, cleanupOldArtifacts } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { renderWidget } from "../tui/render.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
@@ -23,11 +10,11 @@ import { createRpcChildRegistry } from "../runs/persistent/rpc-child-registry.ts
 import { listAsyncRuns } from "../runs/background/async-status.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
+import { createCompletionBroker } from "../runs/background/completion-broker.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
 import { createNativeSupervisorChannel } from "../intercom/native-supervisor-channel.ts";
 import { registerSlashCommands } from "../slash/slash-commands.ts";
 import { clearSlashSnapshots, restoreSlashFinalSnapshots } from "../slash/slash-live-state.ts";
-import { resolveWaitToolConfig } from "../runs/background/wait.ts";
 import registerSubagentNotify from "../runs/background/notify.ts";
 import { PROMPT_RUNTIME_EXTENSION_PATH, SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/pi-args.ts";
 import { loadConfig } from "./config.ts";
@@ -78,9 +65,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(ASYNC_DIR);
 
 	const config = loadConfig();
-	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const asyncByDefault = config.asyncByDefault === true;
-	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
 
 	const state: SubagentState = {
@@ -104,6 +89,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			schedule: () => false,
 			clear: () => {},
 		},
+		completionBroker: createCompletionBroker(),
 	};
 	const persistentChildRegistry = createRpcChildRegistry();
 	const reopenBridge = createReopenBridge({
@@ -205,6 +191,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const runtimeCleanup = () => {
 		stopResultWatcher();
+		state.completionBroker?.dispose();
 		scheduledRunManager.stop();
 		supervisorChannel.dispose();
 		clearPendingForegroundControlNotices(state);
@@ -238,12 +225,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state,
 		config,
 		asyncByDefault,
-		persistentChildRegistry: persistentChildRegistry,
 		handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
-		tempArtifactsDir,
 		getSubagentSessionRoot,
 		expandTilde,
 		discoverAgents,
+		waitLifecycleRoots: { asyncDirRoot: ASYNC_DIR, resultsDir: RESULTS_DIR },
+		getActionableSupervisorRequests: supervisorChannel.getActionableRequests,
 	});
 	executorExecute = executor.execute;
 
@@ -253,11 +240,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	registerSubagentTools(pi, {
 		config,
-		waitToolConfig,
-		state,
-		events: pi.events,
 		execute: executeSubagentCollapsed,
-		getActionableSupervisorRequests: supervisorChannel.getActionableRequests,
 	});
 
 	registerSlashCommands(pi, state, steerView.controller, hostEditorConversation);
@@ -321,6 +304,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const resetSessionState = (ctx: ExtensionContext) => {
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
+		state.completionBroker?.resetSession(state.currentSessionId);
 		state.subagentSpawns = { sessionId: state.currentSessionId, count: 0 };
 		// Set PI_SUBAGENT_PARENT_SESSION for permission-system forwarding.
 		// Only set in the root session (the interactive UI session), not in
@@ -369,6 +353,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			delete globalStore[eventUnsubscribeStoreKey];
 		}
 		stopResultWatcher();
+		state.completionBroker?.dispose();
 		scheduledRunManager.stop();
 		if (state.poller) clearInterval(state.poller);
 		state.poller = null;

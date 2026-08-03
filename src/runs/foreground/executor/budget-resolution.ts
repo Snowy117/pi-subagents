@@ -55,11 +55,17 @@ export function expandTopLevelTaskCounts(tasks: TaskParam[]): { tasks?: TaskPara
 }
 
 
-export function normalizeRepeatedParallelCounts(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: undefined } {
+export function normalizeRepeatedParallelCounts(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: AgentToolResult<Details> } {
 	if (params.tasks) {
 		const expandedTasks = expandTopLevelTaskCounts(params.tasks);
 		if (expandedTasks.error) {
-			return { error: undefined, params: undefined };
+			return {
+				error: {
+					content: [{ type: "text", text: expandedTasks.error }],
+					isError: true,
+					details: { mode: "parallel", results: [] },
+				},
+			};
 		}
 		return { params: { ...params, tasks: expandedTasks.tasks } };
 	}

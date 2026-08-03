@@ -10,11 +10,6 @@ import { type ExecutorDeps, type SubagentParamsLike } from "./types.ts";
 import * as path from "node:path";
 
 
-export function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
-	return requestedCwd ? path.resolve(runtimeCwd, requestedCwd) : runtimeCwd;
-}
-
-
 export function getForegroundControl(state: SubagentState, runId: string | undefined) {
 	if (runId) return state.foregroundControls.get(runId);
 	if (state.lastForegroundControlId) {
@@ -88,8 +83,7 @@ export function reserveSubagentSpawns(input: { state: SubagentState; config: Ext
 
 
 export function countRequestedSubagentSpawns(params: SubagentParamsLike, config: ExtensionConfig): number {
-	if (params.tasks) return params.tasks.length;
-	return params.agent ? 1 : 0;
+	return params.tasks?.length ?? 0;
 }
 
 

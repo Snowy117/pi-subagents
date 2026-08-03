@@ -18,17 +18,6 @@ export interface PromptWorkflow {
 	chain?: string;
 }
 
-const RESERVED_COMMAND_NAMES = new Set([
-	"chain-prompts",
-	"prompt-workflow",
-	"run",
-	"chain",
-	"parallel",
-	"run-chain",
-	"subagents-doctor",
-	"subagents-models",
-]);
-
 function packagePromptsDir(): string {
 	return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts");
 }
@@ -90,7 +79,7 @@ function loadPromptWorkflow(filePath: string): PromptWorkflow | undefined {
 	const content = fs.readFileSync(filePath, "utf-8");
 	const { frontmatter, body } = parseFrontmatter(content);
 	const name = path.basename(filePath, ".md");
-	if (!name || RESERVED_COMMAND_NAMES.has(name)) return undefined;
+	if (!name) return undefined;
 	const model = stringField(frontmatter, "model");
 	const skill = parseSkill(stringField(frontmatter, "skill"));
 	const cwd = stringField(frontmatter, "cwd");

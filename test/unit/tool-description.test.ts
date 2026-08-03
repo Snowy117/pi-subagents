@@ -46,8 +46,8 @@ describe("registered subagent tool description", () => {
 		assert.match(description, /view: "transcript"/);
 		assert.match(description, /action: "steer"/);
 		assert.match(description, /schedule-list/);
-		assert.match(description, /action: "eject"/);
-		assert.match(description, /action: "disable"/);
+		assert.match(description, /action: "wait"/);
+		assert.doesNotMatch(description, /wait tool/i);
 	});
 
 	it("offers a compact mode that keeps safety-critical guidance", () => {
@@ -57,8 +57,8 @@ describe("registered subagent tool description", () => {
 		assert.ok(description.length < FULL_SUBAGENT_TOOL_DESCRIPTION.length * 0.8, "compact mode should be materially shorter than full mode");
 		assert.match(description, /SINGLE/);
 		assert.match(description, /PARALLEL/);
-		assert.match(description, /action without execution fields/i);
-		assert.match(description, /wait tool/i);
+		assert.match(description, /WAIT \/ CONTROL/);
+		assert.match(description, /action:"wait"/i);
 		assert.match(description, /Do not sleep or poll/i);
 		assert.match(description, /ordinary child subagents are not orchestrators/i);
 		assert.match(description, /one writer/i);
@@ -66,8 +66,7 @@ describe("registered subagent tool description", () => {
 		assert.match(description, /view:"transcript"/);
 		assert.match(description, /steer/);
 		assert.match(description, /schedule-list/);
-		assert.match(description, /eject/);
-		assert.match(description, /disable/);
+		assert.doesNotMatch(description, /wait tool/i);
 		assert.match(description, /status\.json/);
 		assert.match(description, /events\.jsonl/);
 	});

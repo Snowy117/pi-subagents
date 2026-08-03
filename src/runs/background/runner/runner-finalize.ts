@@ -37,7 +37,7 @@ export async function finalizeRun(state: RunnerState, ops: RunnerOps, disposeCon
 			? `parallel:${finalFlatAgents.join("+")}`
 			: `chain:${finalFlatAgents.join("->")}`;
 	let sessionFile: string | undefined;
-if (state.activityTimer) {
+	if (state.activityTimer) {
 		clearInterval(state.activityTimer);
 		state.activityTimer = undefined;
 	}
@@ -118,7 +118,10 @@ if (state.activityTimer) {
 			...(state.timedOut ? { timedOut: true, error: state.timeoutMessage ?? "Subagent timed out." } : state.turnBudgetExceeded ? { error: statusPayload.error ?? "Subagent exceeded turn budget." } : {}),
 			results: results.map((r) => ({
 				agent: r.agent,
+				task: r.task,
 				output: r.output,
+				exitCode: r.exitCode,
+				usage: r.usage,
 				error: r.error,
 				success: r.success,
 				skipped: r.skipped || undefined,

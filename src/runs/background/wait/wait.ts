@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type AsyncRunSummary } from "../async-status.ts";
 import { type Details } from "../../../shared/types.ts";
-import { formatDuration } from "../../../shared/formatters.ts";
 import {
 	ACTIVE_STATES,
 	type WaitDeps,
@@ -10,7 +9,6 @@ import {
 	allRunsForSession,
 	attentionRunsForSession,
 	DEFAULT_POLL_INTERVAL_MS,
-	DEFAULT_TIMEOUT_MS,
 	MIN_POLL_INTERVAL_MS,
 	needsAttention,
 	result,
@@ -20,20 +18,16 @@ import {
 } from "./helpers.ts";
 
 /**
- * Block until the targeted async runs finish, the timeout elapses, or the turn
- * is aborted. Resolves with a short human-readable summary either way.
+ * Block until the targeted async runs finish, attention is required, or the
+ * current tool call is aborted.
  */
 export async function waitForSubagents(
 	params: WaitParams,
 	signal: AbortSignal | undefined,
 	deps: WaitDeps,
 ): Promise<AgentToolResult<Details>> {
-	if (deps.enabled === false) {
-		return result("Wait tool is disabled by config.waitTool or PI_SUBAGENT_WAIT_TOOL_ENABLED; returning immediately without blocking background subagent runs. Active runs keep going, and you can inspect them with subagent({ action: \"status\" }) or wait for completion notifications.");
-	}
 	const now = deps.now ?? Date.now;
 	const pollIntervalMs = Math.max(MIN_POLL_INTERVAL_MS, deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
-	const timeoutMs = params.timeoutMs !== undefined && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_TIMEOUT_MS;
 	const startedAt = now();
 
 	// A single named run always means "wait until that one is done", regardless
@@ -57,9 +51,7 @@ export async function waitForSubagents(
 	if (params.id) {
 		const exact = active.filter((run) => run.id === params.id);
 		if (exact.length === 1) active = exact;
-		else if (active.length > 1) {
-			return result(`Ambiguous async run id prefix "${params.id}" matched ${active.length} active runs: ${active.map((run) => run.id).join(", ")}. Pass a longer id.`, true);
-		}
+		else if (active.length > 1) return result(`Ambiguous async run id prefix "${params.id}" matched ${active.length} active runs: ${active.map((run) => run.id).join(", ")}. Pass a longer id.`, true);
 	}
 	const waitParams = params.id ? { ...params, id: active[0]!.id } : params;
 
@@ -93,15 +85,7 @@ export async function waitForSubagents(
 	while (!done(pending, attention, supervisorAttention)) {
 		if (signal?.aborted) {
 			const stillActive = pending.map((run) => `${run.id} (${run.state})`).join(", ");
-			return result(`Wait aborted after ${formatDuration(now() - startedAt)}. Still active: ${stillActive}.`, true);
-		}
-		if (now() - startedAt >= timeoutMs) {
-			const stillActive = pending.map((run) => `${run.id} (${run.state})`).join(", ");
-			return result(
-				`Wait timed out after ${formatDuration(timeoutMs)} with ${pending.length} run(s) still active: ${stillActive}. `
-					+ `The runs are detached and keep going; call wait again or inspect with subagent({ action: "status" }).`,
-				true,
-			);
+			return result(`Wait aborted after ${Math.max(0, now() - startedAt)}ms. Still active: ${stillActive}.`, true);
 		}
 		try {
 			await waitForWake(pollIntervalMs, signal, deps, () => supervisorAttentionForRuns(deps, initialIds).length > 0);
@@ -140,7 +124,7 @@ export async function waitForSubagents(
 		: "";
 
 	const stillRunning = pending.filter((run) => initialIds.has(run.id)).length;
-	const elapsed = formatDuration(now() - startedAt);
+	const elapsed = `${Math.max(0, now() - startedAt)}ms`;
 	const outcome = terminalSummary ? ` Outcome: ${terminalSummary}.` : "";
 
 	if (waitForAll) {

@@ -40,10 +40,6 @@ export function preflightForkSessionsForStaticTasks(
 	sessionFileForTask: (agentName: string, idx?: number) => string | undefined,
 ): void {
 	if (!contextPolicy.usesFork) return;
-	if (params.agent) {
-		if (shouldForkAgent(contextPolicy, params.agent)) sessionFileForTask(params.agent, 0);
-		return;
-	}
 	if (params.tasks) {
 		params.tasks.forEach((task, index) => {
 			if (shouldForkAgent(contextPolicy, task.agent)) sessionFileForTask(task.agent, index);

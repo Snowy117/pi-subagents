@@ -284,44 +284,6 @@ describe("async execution utilities — availability & lifecycle guards", { skip
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("cancels async acceptance verification when the run times out", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({ output: "implementation complete" });
-		const id = `async-timeout-acceptance-${Date.now().toString(36)}`;
-		const startedAt = Date.now();
-		executeAsyncSingle(id, {
-			agent: "worker",
-			task: "Implement with verified acceptance",
-			agentConfig: makeAgent("worker"),
-			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
-			artifactConfig: {
-				enabled: false,
-				includeInput: false,
-				includeOutput: false,
-				includeJsonl: false,
-				includeMetadata: false,
-				cleanupDays: 7,
-			},
-			shareEnabled: false,
-			maxSubagentDepth: 2,
-			timeoutMs: 1_000,
-			acceptance: {
-				level: "verified",
-				verify: [{ id: "slow", command: `${process.execPath} -e "setTimeout(()=>process.exit(0), 5000)"`, timeoutMs: 10_000 }],
-			},
-		});
-
-		const resultPath = await waitForAsyncResultFile(id, 5_000);
-		const elapsedMs = Date.now() - startedAt;
-		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
-		assert.equal(payload.state, "failed");
-		assert.equal(payload.timedOut, true);
-		assert.equal(payload.results[0]?.timedOut, true);
-		assert.equal(payload.results[0]?.acceptance, undefined);
-		assert.equal(status.steps?.[0]?.timedOut, true);
-		assert.ok(elapsedMs < 3_000, `timeout should cancel acceptance verification promptly, elapsed ${elapsedMs}ms`);
-	});
-
 	it("async turn budget allows a terminal final grace turn", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({
 			jsonl: [
@@ -424,8 +386,8 @@ describe("async execution utilities — availability & lifecycle guards", { skip
 		});
 		assert.match(singleResult.content[0]?.text ?? "", /Async: worker \[/);
 		assert.match(singleResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
-		assert.match(singleResult.content[0]?.text ?? "", /call wait\(\)/);
-		assert.match(singleResult.content[0]?.text ?? "", /there is no next turn, so use wait\(\)/);
+		assert.match(singleResult.content[0]?.text ?? "", /subagent\(\{ action: "wait", id: "\.\.\." \}\)/);
+		assert.match(singleResult.content[0]?.text ?? "", /without an orchestration timeout/);
 		await waitForAsyncResultFile(singleId, 30_000);
 
 		mockPi.onCall({ output: "parallel one done" });
@@ -439,22 +401,11 @@ describe("async execution utilities — availability & lifecycle guards", { skip
 		});
 		assert.match(parallelResult.content[0]?.text ?? "", /Async parallel:/);
 		assert.match(parallelResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
-		assert.match(parallelResult.content[0]?.text ?? "", /call wait\(\)/);
+		assert.match(parallelResult.content[0]?.text ?? "", /subagent\(\{ action: "wait", id: "\.\.\." \}\)/);
 		const parallelResultPath = await waitForAsyncResultFile(parallelId, 10_000);
 		const parallelPayload = JSON.parse(fs.readFileSync(parallelResultPath, "utf-8")) as { agent?: string; mode?: string };
 		assert.equal(parallelPayload.mode, "parallel");
 		assert.equal(parallelPayload.agent, "parallel:worker+reviewer");
-
-		mockPi.onCall({ output: "chain done" });
-		const chainId = `async-handoff-chain-${Date.now().toString(36)}`;
-		const chainResult = executeAsyncChain(chainId, {
-			chain: [{ agent: "worker", task: "Do chained work" }],
-			agents: [makeAgent("worker")],
-			...commonParams,
-		});
-		assert.match(chainResult.content[0]?.text ?? "", /Async chain:/);
-		assert.match(chainResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
-		await waitForAsyncResultFile(chainId, 10_000);
 	});
 
 });

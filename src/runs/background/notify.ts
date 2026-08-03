@@ -158,7 +158,7 @@ export function buildCompletionDetails(result: SubagentResult): SubagentNotifyDe
 
 export default function registerSubagentNotify(
 	pi: ExtensionAPI,
-	state: Pick<SubagentState, "currentSessionId">,
+	state: Pick<SubagentState, "currentSessionId" | "completionBroker">,
 	options: RegisterSubagentNotifyOptions = {},
 ): void {
 	const unsubscribeStoreKey = "__pi_subagents_notify_unsubscribe__";
@@ -196,6 +196,8 @@ export default function registerSubagentNotify(
 	const handleComplete = (data: unknown) => {
 		const result = data as SubagentResult;
 		if (typeof result.sessionId !== "string" || result.sessionId !== state.currentSessionId) return;
+		const runId = result.id ?? (result as SubagentResult & { runId?: string }).runId;
+		if (runId && state.completionBroker?.isOwned(runId, result.sessionId)) return;
 		const now = nowFn();
 		const key = buildCompletionKey(result, "notify");
 		if (markSeenWithTtl(seen, key, now, ttlMs)) return;

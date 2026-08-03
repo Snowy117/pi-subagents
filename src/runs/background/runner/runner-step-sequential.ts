@@ -71,7 +71,9 @@ export async function runSequentialStep(state: RunnerState, ops: RunnerOps, seqS
 	state.previousOutput = singleResult.output;
 	state.results.push({
 		agent: singleResult.agent,
+		task: seqStep.task,
 		output: state.timedOut ? (state.timeoutMessage ?? "Subagent timed out.") : singleResult.output,
+		usage: singleResult.usage,
 		error: state.timedOut ? (state.timeoutMessage ?? "Subagent timed out.") : singleResult.error,
 		success: !state.timedOut && singleResult.interrupted !== true && singleResult.exitCode === 0,
 		exitCode: state.timedOut ? 1 : singleResult.interrupted === true ? 0 : singleResult.exitCode,

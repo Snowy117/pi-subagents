@@ -8,67 +8,65 @@ const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
 
 export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • Use { action: "list" } before execution and only run executable/non-disabled agents.
-• Keep execution and management separate: omit action for execution (tasks array); use action only for list/get/models/create/update/delete/status/interrupt/resume/steer/doctor.
-• Async/background runs: launch with async:true only when work can proceed independently. Do not sleep or poll status just to wait; if this turn must block, use the wait tool. Otherwise continue useful work or respond and let completion notifications arrive.
+• Keep execution and control separate: omit action for execution (tasks array); use action for lifecycle inspection, waiting, and management.
+• Async/background runs: async:true returns immediately. Do not sleep or poll status just to wait; use { action: "wait", id? } when this turn must block. Otherwise continue useful work or let completion notifications arrive.
 • Child-safety boundary: ordinary child subagents are not orchestrators and must not run subagents. Only explicitly configured fanout children may use the child-safe subagent tool, still bounded by depth/session limits.
 • Writing/review safety: keep one writer for the same cwd/worktree. Use fresh-context read-only reviewers/validators for independent review, then have the parent synthesize and apply fixes as the sole writer unless an isolated worktree was intentionally requested.
 • Artifacts/status essentials: async runs expose asyncId/asyncDir with status.json, events.jsonl, output logs, and status via { action: "status", id }. Include output paths and residual risks when reporting results.`;
 
-export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate to subagents or manage agent definitions.
+export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Delegate work to configured subagents and manage detached runs.
 
-EXECUTION (use exactly ONE mode):
+EXECUTION (omit action):
 • Before executing, use { action: "list" } to inspect configured agents. Only execute agents listed as executable/non-disabled.
-• SINGLE: { tasks: [{agent, task?}] } - one task via tasks array; omit task for self-contained agents
-• PARALLEL: { tasks: [{agent, task, count?, progress?, model?, skill?}, ...], concurrency?, worktree? } - concurrent execution (worktree: isolate each task in a git worktree)
+• SINGLE: { tasks: [{agent, task}] } - exactly one concrete invocation (count omitted or count:1).
+• PARALLEL: { tasks: [{agent, task, count?, progress?, model?, skill?}, ...], concurrency?, worktree? } - count-expanded cardinality greater than one; worktree isolates tasks in git worktrees.
 • Optional context: { context: "fresh" | "fork" } (explicit value overrides every child; when omitted, each requested agent uses its own defaultContext, otherwise "fresh"; inspect agent defaults via { action: "list" })
 • If { action: "list" } shows proactive skill subagent suggestions, consider a small fresh-context fanout for broad tasks where one of those skills would materially help
+• Every execution uses a detached runner. async:true returns its launch receipt; async:false/default waits for that exact run and returns the full normal result.
 
-MANAGEMENT (use action field, omit tasks):
+WAIT (use action, omit tasks):
+• { action: "wait" } - snapshot current-session active runs and return on the first completion or actionable attention event.
+• { action: "wait", all: true } - wait for every snapshotted run unless one needs actionable attention.
+• { action: "wait", id: "run-id-or-unique-prefix" } - exact id wins; ambiguous prefixes error; no active match returns immediately.
+• Wait has no elapsed orchestration timeout. Cancelling the tool call stops only the wait, never the detached runner.
+
+DISCOVERY / DIAGNOSTICS:
 • { action: "list" } - discover executable agents
-• { action: "get", agent: "name" } - full detail; packaged agents use dotted runtime names like "package.agent"
-• { action: "models", agent?: "name" } - show the runtime-loaded builtin subagent model mapping, optionally filtered to one builtin
-• { action: "create", config: { name: "custom-agent", package: "code-analysis", systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, defaultContext, ... } }
-• { action: "update", agent: "code-analysis.custom-agent", config: { package: "analysis", ... } } - merge
-• { action: "delete", agent: "code-analysis.custom-agent" }
-• { action: "eject", agent: "reviewer" } - copy a bundled/package agent to user/project scope as an editable custom file that shadows the original (default scope: user)
-• { action: "disable", agent: "reviewer" } - hide any agent from runtime discovery via a reversible settings override (default scope: user)
-• { action: "enable", agent: "reviewer" } - remove a disabled override and restore discovery
-• { action: "reset", agent: "reviewer" } - delete the scope's custom agent file and/or settings override, restoring the bundled default
+• { action: "models" } - show the runtime-loaded builtin model mapping
+• { action: "doctor" } - read-only runtime paths, discovery, sessions, and intercom diagnostics
 
 CONTROL:
 • { action: "status", id: "..." } - inspect an async/background run by id or prefix
-• { action: "status", view: "fleet" } - read-only active foreground/async fleet view with transcript commands
+• { action: "status", view: "fleet" } - read-only active-run fleet view
 • { action: "status", id: "...", view: "transcript", index?: 0, lines?: 80 } - tail a run or child output/session transcript
 • { action: "interrupt", id?: "..." } - soft-interrupt the current child turn and leave the run paused
-• { action: "resume", id: "...", message: "...", index?: 0 } - interrupt then follow up with a live async child, or revive a completed async/foreground child from its session
+• { action: "resume", id: "...", message: "...", index?: 0 } - follow up with a live child or revive a completed child from its session
 • { action: "steer", id: "...", message: "...", index?: 0 } - queue non-terminal guidance for a live/queued async Pi child when supported
 
 SCHEDULE (opt-in; requires { "scheduledRuns": { "enabled": true } } in config.json):
-• { action: "schedule", tasks: [{agent, task?}], schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer a subagent launch until a future time. Also accepts tasks[] with multiple entries. Scheduled runs always launch async with fresh context; they become normal tracked async runs once they fire. Only schedule explicit delayed runs the user asked for.
+• { action: "schedule", tasks: [{agent, task}], schedule: "+10m" | "2030-01-01T09:00:00Z", scheduleName? } - defer an explicit user-requested launch. Scheduled runs start detached with fresh context.
 • { action: "schedule-list" } - list scheduled runs for this session
 • { action: "schedule-status", id: "..." } - inspect one scheduled run
 • { action: "schedule-cancel", id: "..." } - cancel a scheduled run before it fires
 
-DIAGNOSTICS:
-• { action: "doctor" } - read-only report for runtime paths, discovery, sessions, and intercom
-
 ${SUBAGENT_SAFETY_GUIDANCE}`;
 
-export const COMPACT_SUBAGENT_TOOL_DESCRIPTION = `Delegate to subagents or manage definitions. Use exactly one mode per call.
+export const COMPACT_SUBAGENT_TOOL_DESCRIPTION = `Delegate to configured subagents or manage detached runs. Use exactly one mode per call.
 
 EXECUTE:
 • Before execution, call { action: "list" }; run only executable/non-disabled configured agents.
-• SINGLE {tasks:[{agent,task?}]}; PARALLEL {tasks:[{agent,task,count?,progress?,model?,skill?}], concurrency?, worktree?}.
+• SINGLE {tasks:[{agent,task}]} means one count-expanded invocation. PARALLEL means count>1 or multiple concrete tasks.
 • context can be "fresh" or "fork"; omitted uses each agent defaultContext, otherwise fresh.
-• If list shows proactive skill subagent suggestions, use a small fresh-context fanout only when the task is broad enough.
+• Every call launches detached. async:true returns immediately; async:false/default waits for the exact run and returns its full result.
 
-MANAGE / CONTROL:
-• Use action without execution fields: list, get, models, create, update, delete, eject, disable, enable, reset, doctor.
-• Async control actions: status, interrupt, resume, steer. Use status view:"fleet" for active-run overview, view:"transcript" to tail child output, and steer for non-terminal live guidance. Use id/runId prefixes carefully; use index for a specific child.
+WAIT / CONTROL:
+• {action:"wait", id?, all?} snapshots current-session active runs and has no elapsed timeout. Abort stops only the wait. needs_attention and actionable supervisor requests wake it; ordinary progress does not.
+• status, interrupt, resume, and steer use id or a unique prefix. Use status view:"fleet" for active-run overview and view:"transcript" to tail child output.
+• Discovery/diagnostics: list, models, doctor.
 • Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.
 
-ASYNC / WAIT:
-• async:true detaches background work. Do not sleep or poll just to wait; use the wait tool only when this turn must block. Otherwise continue useful work or respond and let completion notifications arrive.
+ASYNC:
+• Do not sleep or poll just to wait. Use action:"wait" only when this turn must block; otherwise continue useful work or let completion notifications arrive.
 • Status and artifacts live under asyncId/asyncDir with status.json, events.jsonl, output logs, session files, and { action:"status", id:"..." }.
 
 SAFETY:

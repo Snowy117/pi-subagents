@@ -13,6 +13,7 @@ import {
 	scheduledRunStorePath,
 	scheduledRunsEnabled,
 } from "../../src/runs/background/scheduled-runs.ts";
+import type { SubagentParamsLike } from "../../src/runs/foreground/subagent-executor.ts";
 import type { ExtensionConfig } from "../../src/shared/types.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -113,6 +114,19 @@ function isError(result: { isError?: boolean }): boolean {
 	return result.isError === true;
 }
 
+function scheduleRequest(
+	task: string,
+	schedule?: string,
+	overrides: Partial<SubagentParamsLike> = {},
+): SubagentParamsLike {
+	return {
+		action: "schedule",
+		tasks: [{ agent: "delegate", task }],
+		...(schedule ? { schedule } : {}),
+		...overrides,
+	};
+}
+
 describe("scheduled-runs helpers", () => {
 	it("isScheduledRunAction narrows the four actions", () => {
 		assert.equal(isScheduledRunAction("schedule"), true);
@@ -184,7 +198,7 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
 
 	it("rejects schedule actions when the feature is disabled", async () => {
 		const harness = freshHarness({ config: makeConfig({ enabled: false }) });
-		const result = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m" }, harness.ctx);
+		const result = await harness.manager.handleToolCall(scheduleRequest("x", "+10m"), harness.ctx);
 		assert.equal(isError(result), true);
 		assert.match(result.content[0]!.text, /disabled/);
 		assert.equal(harness.timers.pendingCount(), 0);
@@ -192,49 +206,59 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
 
 	it("creates a scheduled job and arms a timer", async () => {
 		const harness = freshHarness();
-		const result = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "review later", schedule: "+10m", scheduleName: "nightly review" }, harness.ctx);
+		const result = await harness.manager.handleToolCall(scheduleRequest("review later", "+10m", { scheduleName: "nightly review" }), harness.ctx);
 		assert.equal(isError(result), false);
 		assert.match(result.content[0]!.text, /Scheduled subagent run id-/);
 		assert.match(result.content[0]!.text, /nightly review/);
+		assert.match(result.content[0]!.text, /Mode: single/);
 		assert.equal(harness.timers.pendingCount(), 1);
 		const list = await harness.manager.handleToolCall({ action: "schedule-list" }, harness.ctx);
 		assert.match(list.content[0]!.text, /nightly review/);
 	});
 
-	it("requires exactly one execution mode", async () => {
+	it("uses count-expanded cardinality for scheduled parallel mode", async () => {
 		const harness = freshHarness();
-		// no execution mode at all
+		const result = await harness.manager.handleToolCall(scheduleRequest("review twice", "+10m", {
+			tasks: [{ agent: "delegate", task: "review twice", count: 2 }],
+		}), harness.ctx);
+		assert.equal(isError(result), false);
+		assert.match(result.content[0]!.text, /Name: parallel \(2\)/);
+		assert.match(result.content[0]!.text, /Mode: parallel/);
+	});
+
+	it("requires tasks", async () => {
+		const harness = freshHarness();
 		const none = await harness.manager.handleToolCall({ action: "schedule", schedule: "+10m" }, harness.ctx);
-		assert.match(none.content[0]!.text, /exactly one execution mode/);
+		assert.match(none.content[0]!.text, /requires tasks/);
 	});
 
 	it("requires a schedule and rejects fork/async-false", async () => {
 		const harness = freshHarness();
-		const noSchedule = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x" }, harness.ctx);
+		const noSchedule = await harness.manager.handleToolCall(scheduleRequest("x"), harness.ctx);
 		assert.match(noSchedule.content[0]!.text, /requires schedule/);
-		const fork = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m", context: "fork" }, harness.ctx);
+		const fork = await harness.manager.handleToolCall(scheduleRequest("x", "+10m", { context: "fork" }), harness.ctx);
 		assert.match(fork.content[0]!.text, /fresh context/);
-		const sync = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m", async: false }, harness.ctx);
+		const sync = await harness.manager.handleToolCall(scheduleRequest("x", "+10m", { async: false }), harness.ctx);
 		assert.match(sync.content[0]!.text, /always async/);
 	});
 
 	it("rejects a past schedule time", async () => {
 		const harness = freshHarness({ now: Date.now() + 60_000 });
-		const result = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "2020-01-01T00:00:00Z" }, harness.ctx);
+		const result = await harness.manager.handleToolCall(scheduleRequest("x", "2020-01-01T00:00:00Z"), harness.ctx);
 		assert.match(result.content[0]!.text, /in the past/);
 	});
 
 	it("enforces maxPending", async () => {
 		const harness = freshHarness({ config: makeConfig({ maxPending: 1 }) });
-		const first = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m" }, harness.ctx);
+		const first = await harness.manager.handleToolCall(scheduleRequest("x", "+10m"), harness.ctx);
 		assert.equal(isError(first), false);
-		const second = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "y", schedule: "+20m" }, harness.ctx);
+		const second = await harness.manager.handleToolCall(scheduleRequest("y", "+20m"), harness.ctx);
 		assert.match(second.content[0]!.text, /limit reached/);
 	});
 
 	it("status resolves by exact id and prefix, and rejects ambiguous/missing", async () => {
 		const harness = freshHarness();
-		const created = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m" }, harness.ctx);
+		const created = await harness.manager.handleToolCall(scheduleRequest("x", "+10m"), harness.ctx);
 		const id = extractId(created);
 		const status = await harness.manager.handleToolCall({ action: "schedule-status", id }, harness.ctx);
 		assert.match(status.content[0]!.text, /State: scheduled/);
@@ -249,7 +273,7 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
 
 	it("cancel clears the timer and marks the job canceled", async () => {
 		const harness = freshHarness();
-		const created = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m" }, harness.ctx);
+		const created = await harness.manager.handleToolCall(scheduleRequest("x", "+10m"), harness.ctx);
 		const id = extractId(created);
 		assert.equal(harness.timers.pendingCount(), 1);
 		const canceled = await harness.manager.handleToolCall({ action: "schedule-cancel", id }, harness.ctx);
@@ -261,7 +285,7 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
 
 	it("cancel refuses a terminal job", async () => {
 		const harness = freshHarness();
-		const created = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m" }, harness.ctx);
+		const created = await harness.manager.handleToolCall(scheduleRequest("x", "+10m"), harness.ctx);
 		const id = extractId(created);
 		await harness.manager.handleToolCall({ action: "schedule-cancel", id }, harness.ctx);
 		const again = await harness.manager.handleToolCall({ action: "schedule-cancel", id }, harness.ctx);
@@ -312,7 +336,7 @@ describe("ScheduledRunManager firing", () => {
 
 	it("launches the sanitized async run when the timer fires", async () => {
 		const harness = freshHarness();
-		const created = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "review", schedule: "+10m", scheduleName: "rev" }, harness.ctx);
+		const created = await harness.manager.handleToolCall(scheduleRequest("review", "+10m", { scheduleName: "rev" }), harness.ctx);
 		const id = extractId(created);
 		harness.clock.now += 10 * 60_000; // advance to runAt so fire() launches instead of re-arming
 		harness.timers.fireAll();
@@ -320,8 +344,7 @@ describe("ScheduledRunManager firing", () => {
 		const launch = harness.launches[0]!;
 		assert.equal(launch.params.async, true);
 		assert.equal(launch.params.context, "fresh");
-		assert.equal(launch.params.agent, "scout");
-		assert.equal(launch.params.task, "review");
+		assert.deepEqual(launch.params.tasks, [{ agent: "delegate", task: "review" }]);
 		assert.equal((launch.params as { action?: string }).action, undefined, "action must be stripped before launch");
 		assert.equal((launch.params as { schedule?: string }).schedule, undefined, "schedule must be stripped before launch");
 
@@ -339,7 +362,7 @@ describe("ScheduledRunManager firing", () => {
 
 	it("marks the job failed when launch returns an error result", async () => {
 		const harness = freshHarness();
-		const created = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+1m" }, harness.ctx);
+		const created = await harness.manager.handleToolCall(scheduleRequest("x", "+1m"), harness.ctx);
 		const id = extractId(created);
 		harness.clock.now += 60_000; // advance to runAt
 		harness.timers.fireAll();
@@ -370,7 +393,7 @@ describe("ScheduledRunManager firing", () => {
 			launch: () => Promise.reject(new Error("spawn ENOENT")),
 		});
 		throwingManager.bindSession(ctx);
-		const created = await throwingManager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+1m" }, ctx);
+		const created = await throwingManager.handleToolCall(scheduleRequest("x", "+1m"), ctx);
 		const id = extractId(created);
 		clock.now += 60_000; // advance to runAt
 		timers.fireAll();
@@ -383,7 +406,7 @@ describe("ScheduledRunManager firing", () => {
 	it("re-arms instead of launching when a capped timer fires before runAt", async () => {
 		const harness = freshHarness({ now: 1_000_000 });
 		// +25d exceeds MAX_TIMER_DELAY_MS so the armed timer is capped and would fire "early" in fake time.
-		const created = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+25d" }, harness.ctx);
+		const created = await harness.manager.handleToolCall(scheduleRequest("x", "+25d"), harness.ctx);
 		const id = extractId(created);
 		harness.timers.fireAll();
 		assert.equal(harness.launches.length, 0, "must not launch before runAt");
@@ -403,7 +426,7 @@ describe("ScheduledRunManager firing", () => {
 
 	it("cancel before fire prevents the launch", async () => {
 		const harness = freshHarness();
-		const created = await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "x", schedule: "+10m" }, harness.ctx);
+		const created = await harness.manager.handleToolCall(scheduleRequest("x", "+10m"), harness.ctx);
 		const id = extractId(created);
 		await harness.manager.handleToolCall({ action: "schedule-cancel", id }, harness.ctx);
 		harness.timers.fireAll();
@@ -438,8 +461,8 @@ describe("ScheduledRunManager restart restore", () => {
 			launch: () => Promise.resolve({ content: [{ type: "text", text: "ok" }], details: { mode: "single", results: [] } }),
 		});
 		managerA.bindSession(ctx);
-		const soon = await managerA.handleToolCall({ action: "schedule", agent: "scout", task: "soon", schedule: "+10m" }, ctx);
-		const later = await managerA.handleToolCall({ action: "schedule", agent: "scout", task: "later", schedule: "+1h" }, ctx);
+		const soon = await managerA.handleToolCall(scheduleRequest("soon", "+10m"), ctx);
+		const later = await managerA.handleToolCall(scheduleRequest("later", "+1h"), ctx);
 		const soonId = extractId(soon);
 		const laterId = extractId(later);
 		assert.equal(timersA.pendingCount(), 2);

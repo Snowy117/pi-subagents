@@ -1,44 +1,33 @@
 # Schema & Type Safety
 
-> How this project defines, validates, and reuses types. The defining trait:
-> **runtime schemas via TypeBox**, not just compile-time interfaces.
-
----
+> Runtime schemas and shared TypeScript contracts for `pi-subagents`.
 
 ## Overview
 
-Type safety in `pi-subagents` has two layers:
+The project has two type-safety layers:
 
-1. **Compile-time** — TypeScript interfaces/types (in `src/shared/types.ts`
-   and co-located `.ts` files), checked via the TypeScript language server.
-2. **Runtime** — [TypeBox](https://github.com/sinclairzx/typebox) schemas
-   (`Type.*`) for any data crossing a trust boundary (tool params, RPC
-   payloads, config).
+1. **Runtime validation** with TypeBox for data crossing a trust boundary, especially tool parameters and RPC payloads.
+2. **Compile-time types** for internal state, normalized lifecycle data, and cross-module contracts.
 
-Runtime validation matters because subagent tool parameters and JSON RPC
-bridges come from external callers / child processes. A plain TS interface
-gives no protection there.
+A TypeScript interface alone is not validation. External tool/RPC input must have a runtime schema or explicit parser.
 
----
+## Current `subagent` schema
 
-## Subagent Dispatch Schema (16 params)
+The public API is one tool. Management, integrated wait, scheduling, and execution share one top-level object:
 
-After the `08-01-simplify-subagent-params` cleanup, the subagent dispatch API
-was reduced from 30+ params to 16. All configuration-driven defaults
-(`toolBudget`, `turnBudget`, `timeout`, `cwd`, `sessionDir`, `output`,
-`outputMode`, `reads`, `control`) are read from agent config only — dispatch
-no longer overrides them.
-
-```typescript
+```ts
 const SubagentParamsSchema = Type.Object({
-  // Management/control
+  // Management and integrated wait
   action: Type.Optional(Type.String()),
   id: Type.Optional(Type.String()),
   index: Type.Optional(Type.Integer({ minimum: 0 })),
   view: Type.Optional(Type.String({ enum: ["fleet", "transcript"] })),
   lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
   message: Type.Optional(Type.String()),
-  config: Type.Optional(Type.Unsafe({ anyOf: [{ type: "object" }, { type: "string" }] })),
+  config: Type.Optional(Type.Unsafe({
+    anyOf: [{ type: "object" }, { type: "string" }],
+  })),
+  all: Type.Optional(Type.Boolean()),
 
   // Scheduling
   schedule: Type.Optional(Type.String()),
@@ -55,9 +44,9 @@ const SubagentParamsSchema = Type.Object({
 });
 ```
 
-`TaskItem` has 6 fields:
+`TaskItem` is the only public execution shape:
 
-```typescript
+```ts
 const TaskItem = Type.Object({
   agent: Type.String(),
   task: Type.String(),
@@ -68,119 +57,187 @@ const TaskItem = Type.Object({
 });
 ```
 
-### One mode to rule them all
+Do not restore public top-level `agent`/`task`, chain, runtime/cwd/session/output/reads/control overrides, or standalone wait parameters.
 
-All execution is unified via `tasks: [{agent, task}]`. A single task is just
-parallel with n=1. The old `agent`/`task` top-level params are removed.
+## Integrated wait contract
 
-### Removed features (from user-facing dispatch)
-
-- Chain support (CHAIN mode, chainDir, chainName, dynamic fanout)
-- Clarify TUI
-- Session sharing (GitHub Gist)
-- Acceptance gates
-- toolBudget / turnBudget / timeoutMs / maxRuntimeMs overrides
-- cwd override
-- sessionDir override
-- control override
-- agentScope override
-- output / outputMode / reads overrides
-- runId / dir aliases (only `id`)
-
-## TypeBox Schemas (for tool params & RPC)
-
-`src/extension/schemas.ts` defines the public tool-parameter schemas using
-TypeBox. This is the canonical pattern for anything exposed as a tool or RPC:
+Waiting uses the normal tool schema:
 
 ```ts
-import { Type } from "typebox";
+subagent({ action: "wait" })
+subagent({ action: "wait", all: true })
+subagent({ action: "wait", id: "exact-or-unique-prefix" })
+```
 
-// Primitive scalar
+Schema/type requirements:
+
+- `wait` is part of `SUBAGENT_ACTIONS`;
+- `all?: boolean` is a direct top-level parameter;
+- `id` is shared by wait/status/control targeting;
+- no `timeoutMs` orchestration field exists;
+- no `WaitParamsSchema`, standalone `wait` tool type, wait enablement config, or wait environment switch exists;
+- root and child-safe executors receive authorized lifecycle roots through injected internal dependencies, not user input.
+
+The runtime action dispatcher handles `wait` before generic agent-management actions. Internal wait results remain normal `AgentToolResult<Details>` values.
+
+## Canonical execution mode
+
+Mode is determined once after `count` expansion:
+
+```ts
+type SubagentRunMode = "single" | "parallel";
+
+function modeForConcreteInvocationCount(count: number): SubagentRunMode {
+  return count === 1 ? "single" : "parallel";
+}
+```
+
+Contracts:
+
+- one task with omitted `count` or `count: 1` is `single`;
+- one task with `count > 1` is `parallel`;
+- multiple concrete tasks are `parallel`;
+- prepared execution stores the canonical mode and one generated run ID;
+- launch metadata, nested metadata, persisted status, tracker events, call labels, and final `Details.mode` reuse those values;
+- downstream modules must not infer mode again from `tasks.length > 0`.
+
+This replaces the stale rule that a one-element task array was “parallel with n=1.”
+
+## Detached return policy
+
+All public execution launches through the detached runner. `async` is a return-policy field:
+
+- `async: true` returns the launch receipt;
+- false/default claims sync ownership, launches the same detached runner, waits for its exact generated ID, and reconstructs the full result.
+
+Do not add a separate public foreground/synchronous input union. Internal compatibility or resume helpers may retain narrower legacy types only when they remain reachable for non-public behavior.
+
+## Completion types
+
+The result file is an external JSON boundary and must be modeled faithfully. The normalized completion contract includes available:
+
+- run ID, session ID, mode, state, summary, error, timestamps, duration, cwd, and async directory;
+- child agent, task, output, error, status, exit code, usage, session file, model, model attempts, cost, artifacts, truncation, transcript, and structured output;
+- run output maps, workflow graph, aggregate tokens/cost, budgets, and lifecycle metadata.
+
+The result watcher validates session ownership and normalizes before passing data to the completion broker, intercom, event bus, tracker, or synchronous converter. Do not maintain several weaker competing result shapes.
+
+`Usage` belongs to each child result when the runner knows it. Legacy files without per-child usage use an explicit zero usage object; never distribute aggregate tokens or cost across children heuristically.
+
+## Completion broker contracts
+
+The session-scoped broker owns two typed maps:
+
+```ts
+interface SyncOwnership {
+  runId: string;
+  sessionId: string;
+  mode: SubagentRunMode;
+  tasks: ConcreteTaskDescriptor[];
+  claimedAt: number;
+}
+
+interface CachedCompletion {
+  completion: NormalizedAsyncCompletion;
+  cachedAt: number;
+}
+```
+
+The exact interfaces may remain co-located with the broker, but the contracts are:
+
+- claim is keyed by exact run ID and owning session;
+- completion cache and ownership have bounded, TTL-pruned lifetimes;
+- cache-before-publish allows fast-completion recovery;
+- wait is exact-run and subscribes before rechecking;
+- session reset drops foreign-session state;
+- dispose resolves/cleans internal waiters without affecting detached processes;
+- general `action:"wait"` is an observer and creates no sync ownership.
+
+## TypeBox conventions
+
+`src/extension/schemas.ts` and `src/extension/schemas/*.ts` define public tool schemas.
+
+### Required patterns
+
+- Use `Type.Optional(...)` for optional properties.
+- Put descriptions on direct children of the top-level parameter object. The schema sanitizer removes nested descriptions.
+- Use `Type.Unsafe(...)` for unions TypeBox builders do not express cleanly.
+- Reuse shared scalar schemas such as skill overrides.
+- Keep runtime schema and exported TypeScript parameter type aligned.
+- Prefer strict finite unions or explicit runtime validation where the external vocabulary is closed.
+
+Example scalar union:
+
+```ts
 const SkillOverride = Type.Unsafe({
   anyOf: [
     { type: "array", items: { type: "string" } },
     { type: "boolean" },
     { type: "string" },
   ],
-  description: "Skill name(s) to make available (comma-separated), array of strings, or boolean",
-});
-
-// Composed object with optional fields
-Type.Object({
-  agent: Type.String({ description: "..." }),
-  task: Type.Optional(Type.String()),
-  async: Type.Optional(Type.Boolean()),
 });
 ```
 
-Observed TypeBox builder usage (frequency): `Type.Optional` (121),
-`Type.String` (57), `Type.Integer` (18), `Type.Object` (14),
-`Type.Boolean` (14), `Type.Unsafe` (10), `Type.Array` (5), `Type.Number` (1).
+## TypeScript conventions
 
-### Conventions
+- Use `interface` for object shapes and `type` for unions/aliases.
+- Use string-literal unions, not `enum`.
+- Use `unknown`, not `any`, for opaque external payloads.
+- Co-locate producer-owned types with their module; move them to `src/shared/types.ts` only when genuinely cross-cutting.
+- Use `import type` for type-only imports.
+- Keep relative ESM imports suffixed with `.ts`.
 
-- **Use `Type.Optional(...)`** for optional fields rather than omitting
-  them and relying on `?` — it keeps the schema and the TS type in sync.
-- **Add `description` only at the top level** of tool parameters.
-  `schemas.ts` runs every schema through `keepTopLevelParameterDescriptions`
-  → `pruneNestedDescriptions`, which strips nested `description` keys so
-  only `properties.<key>.description` survives. If you need a description,
-  put it on a direct child of the top `properties` object.
-- **Use `Type.Unsafe(...)`** when you need a union/shape TypeBox's high-level
-  builders don't express cleanly (e.g. `string | boolean | string[]`).
-- **Reuse scalar schemas** (`SkillOverride`, `OutputOverride`) across
-  multiple tools instead of re-declaring the union each time.
-
----
-
-## TypeScript Types (internal data)
-
-For purely internal data structures, define interfaces in the module that
-owns them, or in `src/shared/types.ts` for cross-cutting types.
-
-`src/shared/types.ts` is the **central registry** for types shared across
-modules: `MaxOutputConfig`, `OutputMode`, `JsonSchemaObject`,
-`ChainOutputMap`, `WorkflowGraphNode`, `SubagentState`, `Details`, etc.
+Examples:
 
 ```ts
-// src/shared/types.ts
-export type OutputMode = "inline" | "file-only";
-export type JsonSchemaObject = Record<string, unknown>;
-export type WorkflowNodeStatus = "pending" | "running" | "completed" | "failed" | "paused" | "detached";
-export interface MaxOutputConfig { bytes?: number; lines?: number; }
+export type WorkflowNodeStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "paused"
+  | "detached";
+
+export interface MaxOutputConfig {
+  bytes?: number;
+  lines?: number;
+}
 ```
 
-### Conventions
+## Package-owned keybinding parsing
 
-- **String-union types for status / mode enums** — e.g.
-  `OutputMode`, `WorkflowNodeStatus`. Do not use `enum`; use string-literal
-  unions (`type X = "a" | "b"`).
-- **Prefer `interface` for object shapes, `type` for unions/aliases.**
-- **`unknown` over `any`** for opaque payloads — e.g. `JsonSchemaObject =
-  Record<string, unknown>`. Catch errors as `unknown` and narrow with
-  `NodeJS.ErrnoException` casts (see error/IO guidelines).
-- **Co-locate a type with the module that produces it** unless it is
-  genuinely cross-cutting, in which case it goes in `shared/types.ts`.
+`subagents.openPicker` is intentionally not part of Pi's runtime action definition table. Its package parser is another trust boundary:
 
----
+- accepted JSON value: one valid key string, an array containing only valid key strings, or `[]`;
+- invalid member, invalid shape, or malformed file: no binding;
+- valid duplicates are removed;
+- values are validated against the supported Pi TUI key grammar before casting to `KeyId`;
+- raw matching uses `matchesKey` only after validation.
 
-## When to use which
+Do not type-cast an arbitrary JSON string to `KeyId` without runtime validation.
 
-| Data source | Mechanism |
-|-------------|-----------|
-| Subagent tool parameters | TypeBox schema in `extension/schemas.ts` |
-| RPC bridge payloads | TypeBox schema or explicit validation in `extension/rpc.ts` |
-| Internal config / derived state | TS interface/type, often in `shared/types.ts` |
-| Opaque passthrough (model JSON, etc.) | `unknown` / `Record<string, unknown>` |
+The live host actions `app.exit` and `tui.input.submit` are different: they must resolve through the global keybinding manager's `matches()` method so user remaps, removals, migrations, and runtime patches remain authoritative.
 
----
+## Common mistakes
 
-## Common Mistakes
+- Adding only a TypeScript field for external input without updating its TypeBox schema.
+- Restoring a separate wait schema/tool instead of using `action:"wait"`.
+- Recomputing single/parallel mode from raw task-array presence.
+- Returning only a short async summary from a synchronous launch-plus-wait call.
+- Treating aggregate run usage as per-child usage.
+- Using `any` for result-file or RPC payloads.
+- Adding nested schema descriptions and expecting them to survive sanitization.
+- Accepting partially valid picker key arrays instead of rejecting the invalid binding.
 
-- **Validating external params with only a TS interface** — no runtime
-  protection. Always route tool params through a TypeBox schema.
-- **Adding nested `description` keys** — they get stripped by
-  `keepTopLevelParameterDescriptions`; put descriptions at the top level.
-- **Duplicating a union type** across files instead of reusing a shared
-  scalar schema or a type in `shared/types.ts`.
-- **Using `enum`** — the codebase uses string-literal union types everywhere.
+## Validation checklist
+
+- [ ] Public schema accepts integrated wait and contains no wait timeout.
+- [ ] One/count:1 execution is typed and tested as single.
+- [ ] Count>1 and multiple tasks are typed and tested as parallel.
+- [ ] Rich result-file fields survive normalization and sync conversion.
+- [ ] Missing legacy child usage becomes explicit zero usage.
+- [ ] Broker ownership/cache are session-scoped, bounded, and disposable.
+- [ ] External keybinding values are runtime-validated before `KeyId` use.
+- [ ] TypeScript diagnostics and focused schema/result tests are clean.
+
+**Language**: All documentation is written in English.

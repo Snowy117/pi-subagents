@@ -36,10 +36,13 @@ export function collectParallelGroupResults(
 	state.statusPayload.lastUpdate = Date.now();
 	ops.writeStatusPayload();
 
-	for (const pr of parallelResults) {
+	for (let resultIndex = 0; resultIndex < parallelResults.length; resultIndex++) {
+		const pr = parallelResults[resultIndex]!;
 		state.results.push({
 			agent: pr.agent,
+			task: group.parallel[resultIndex]?.task ?? "",
 			output: pr.output,
+			usage: pr.usage,
 			error: pr.error,
 			success: pr.interrupted !== true && pr.exitCode === 0,
 			exitCode: pr.interrupted === true ? 0 : pr.exitCode,

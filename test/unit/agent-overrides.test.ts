@@ -67,21 +67,15 @@ describe("builtin agent overrides", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				defaultModel: "deepseek-v4-flash",
-				agentOverrides: {
-					oracle: { model: "deepseek-v4-pro" },
-					reviewer: { model: false },
-				},
+				agentOverrides: { delegate: { model: "deepseek-v4-pro" } },
 			},
 		});
 
 		const builtins = discoverAgentsAll(tempProject).builtin;
-		const scout = builtins.find((agent) => agent.name === "scout");
-		assert.equal(scout?.model, "deepseek-v4-flash");
-		assert.equal(scout?.modelSource?.type, "subagents.defaultModel");
-		assert.equal(scout?.modelSource?.scope, "user");
-		assert.equal(builtins.find((agent) => agent.name === "worker")?.model, "deepseek-v4-flash");
-		assert.equal(builtins.find((agent) => agent.name === "oracle")?.model, "deepseek-v4-pro");
-		assert.equal(builtins.find((agent) => agent.name === "reviewer")?.model, undefined);
+		const delegate = builtins.find((agent) => agent.name === "delegate");
+		assert.equal(delegate?.model, "deepseek-v4-pro");
+		assert.equal(delegate?.modelSource?.type, "subagents.defaultModel");
+		assert.equal(delegate?.modelSource?.scope, "user");
 	});
 
 	it("prefers project subagents.defaultModel over user defaultModel", () => {
@@ -93,9 +87,9 @@ describe("builtin agent overrides", () => {
 			subagents: { defaultModel: "deepseek-v4-pro" },
 		});
 
-		const worker = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "worker");
-		assert.ok(worker);
-		assert.equal(worker.model, "deepseek-v4-pro");
+		const delegate = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "delegate");
+		assert.ok(delegate);
+		assert.equal(delegate.model, "deepseek-v4-pro");
 	});
 
 	it("applies subagents.defaultModel to custom agents without a frontmatter model", () => {
@@ -121,7 +115,7 @@ describe("builtin agent overrides", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
-					reviewer: {
+					delegate: {
 						model: "openai/gpt-5.4",
 						thinking: "xhigh",
 						systemPromptMode: "replace",
@@ -134,18 +128,18 @@ describe("builtin agent overrides", () => {
 			},
 		});
 
-		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer);
-		assert.equal(reviewer.source, "builtin");
-		assert.equal(reviewer.model, "openai/gpt-5.4");
-		assert.equal(reviewer.thinking, "xhigh");
-		assert.equal(reviewer.systemPromptMode, "replace");
-		assert.equal(reviewer.inheritProjectContext, true);
-		assert.equal(reviewer.inheritSkills, true);
-		assert.deepEqual(reviewer.subagentOnlyExtensions, ["./tools/child-review.ts"]);
-		assert.equal(reviewer.completionGuard, false);
-		assert.equal(reviewer.override?.scope, "user");
-		assert.equal(reviewer.override?.path, path.join(tempHome, ".pi", "agent", "settings.json"));
+		const delegate = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "delegate");
+		assert.ok(delegate);
+		assert.equal(delegate.source, "builtin");
+		assert.equal(delegate.model, "openai/gpt-5.4");
+		assert.equal(delegate.thinking, "xhigh");
+		assert.equal(delegate.systemPromptMode, "replace");
+		assert.equal(delegate.inheritProjectContext, true);
+		assert.equal(delegate.inheritSkills, true);
+		assert.deepEqual(delegate.subagentOnlyExtensions, ["./tools/child-review.ts"]);
+		assert.equal(delegate.completionGuard, false);
+		assert.equal(delegate.override?.scope, "user");
+		assert.equal(delegate.override?.path, path.join(tempHome, ".pi", "agent", "settings.json"));
 	});
 
 	it("globally disables builtin thinking suffix defaults from user settings", () => {
@@ -156,17 +150,14 @@ describe("builtin agent overrides", () => {
 		});
 
 		const builtins = discoverAgentsAll(tempProject).builtin;
-		assert.ok(builtins.some((agent) => agent.name === "reviewer"));
+		assert.ok(builtins.some((agent) => agent.name === "delegate"));
 		assert.deepEqual(
 			builtins
 				.filter((agent) => agent.thinking !== undefined)
 				.map((agent) => agent.name),
 			[],
 		);
-		assert.equal(
-			builtins.find((agent) => agent.name === "reviewer")?.override?.path,
-			path.join(tempHome, ".pi", "agent", "settings.json"),
-		);
+		assert.equal(builtins.find((agent) => agent.name === "delegate")?.override, undefined);
 	});
 
 	it("lets an explicit same-scope thinking override opt back in when global thinking is disabled", () => {
@@ -174,7 +165,7 @@ describe("builtin agent overrides", () => {
 			subagents: {
 				disableThinking: true,
 				agentOverrides: {
-					reviewer: {
+					delegate: {
 						thinking: "high",
 					},
 				},
@@ -182,12 +173,9 @@ describe("builtin agent overrides", () => {
 		});
 
 		const agents = discoverAgents(tempProject, "both").agents;
-		const reviewer = agents.find((agent) => agent.name === "reviewer");
-		const worker = agents.find((agent) => agent.name === "worker");
-		assert.ok(reviewer);
-		assert.ok(worker);
-		assert.equal(reviewer.thinking, "high");
-		assert.equal(worker.thinking, undefined);
+		const delegate = agents.find((agent) => agent.name === "delegate");
+		assert.ok(delegate);
+		assert.equal(delegate.thinking, "high");
 	});
 
 	it("lets project settings disable builtin thinking even when user overrides request it", () => {
@@ -195,7 +183,7 @@ describe("builtin agent overrides", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
-					reviewer: {
+					delegate: {
 						thinking: "xhigh",
 					},
 				},
@@ -207,9 +195,9 @@ describe("builtin agent overrides", () => {
 			},
 		});
 
-		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer);
-		assert.equal(reviewer.thinking, undefined);
+		const delegate = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "delegate");
+		assert.ok(delegate);
+		assert.equal(delegate.thinking, undefined);
 	});
 
 	it("surfaces malformed subagent default model settings", () => {
@@ -247,45 +235,45 @@ describe("builtin agent overrides", () => {
 	it("prefers project settings overrides over user settings overrides", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5.4" } } },
+			subagents: { agentOverrides: { delegate: { model: "openai/gpt-5.4" } } },
 		});
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { agentOverrides: { reviewer: { model: "openai-codex/gpt-5.4-mini", thinking: "high" } } },
+			subagents: { agentOverrides: { delegate: { model: "openai-codex/gpt-5.4-mini", thinking: "high" } } },
 		});
 
-		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer);
-		assert.equal(reviewer.model, "openai-codex/gpt-5.4-mini");
-		assert.equal(reviewer.thinking, "high");
-		assert.equal(reviewer.override?.scope, "project");
-		assert.equal(reviewer.override?.path, path.join(tempProject, ".pi", "settings.json"));
+		const delegate = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "delegate");
+		assert.ok(delegate);
+		assert.equal(delegate.model, "openai-codex/gpt-5.4-mini");
+		assert.equal(delegate.thinking, "high");
+		assert.equal(delegate.override?.scope, "project");
+		assert.equal(delegate.override?.path, path.join(tempProject, ".pi", "settings.json"));
 	});
 
 	it("does not apply project settings overrides when scope is user", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5.4" } } },
+			subagents: { agentOverrides: { delegate: { model: "openai/gpt-5.4" } } },
 		});
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { agentOverrides: { reviewer: { model: "openai-codex/gpt-5.4-mini" } } },
+			subagents: { agentOverrides: { delegate: { model: "openai-codex/gpt-5.4-mini" } } },
 		});
 
-		const reviewer = discoverAgents(tempProject, "user").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer);
-		assert.equal(reviewer.model, "openai/gpt-5.4");
-		assert.equal(reviewer.override?.scope, "user");
+		const delegate = discoverAgents(tempProject, "user").agents.find((agent) => agent.name === "delegate");
+		assert.ok(delegate);
+		assert.equal(delegate.model, "openai/gpt-5.4");
+		assert.equal(delegate.override?.scope, "user");
 	});
 
 	it("does not apply user settings overrides when scope is project", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5.4" } } },
+			subagents: { agentOverrides: { delegate: { model: "openai/gpt-5.4" } } },
 		});
 
-		const reviewer = discoverAgents(tempProject, "project").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer);
-		assert.notEqual(reviewer.model, "openai/gpt-5.4");
-		assert.equal(reviewer.override, undefined);
+		const delegate = discoverAgents(tempProject, "project").agents.find((agent) => agent.name === "delegate");
+		assert.ok(delegate);
+		assert.notEqual(delegate.model, "openai/gpt-5.4");
+		assert.equal(delegate.override, undefined);
 	});
 
 	it("does not read malformed out-of-scope settings files", () => {
@@ -293,13 +281,13 @@ describe("builtin agent overrides", () => {
 		fs.mkdirSync(path.join(tempHome, ".pi", "agent"), { recursive: true });
 		fs.writeFileSync(path.join(tempHome, ".pi", "agent", "settings.json"), '{"subagents":', "utf-8");
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { agentOverrides: { reviewer: { model: "openai-codex/gpt-5.4-mini" } } },
+			subagents: { agentOverrides: { delegate: { model: "openai-codex/gpt-5.4-mini" } } },
 		});
 
-		const reviewer = discoverAgents(tempProject, "project").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer);
-		assert.equal(reviewer.model, "openai-codex/gpt-5.4-mini");
-		assert.equal(reviewer.override?.scope, "project");
+		const delegate = discoverAgents(tempProject, "project").agents.find((agent) => agent.name === "delegate");
+		assert.ok(delegate);
+		assert.equal(delegate.model, "openai-codex/gpt-5.4-mini");
+		assert.equal(delegate.override?.scope, "project");
 	});
 
 });

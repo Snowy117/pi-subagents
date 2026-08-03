@@ -49,12 +49,6 @@ export interface CompletionBatchConfig {
 	stragglerWindowMs?: number;
 }
 
-export interface WaitToolConfigObject {
-	enabled?: boolean;
-}
-
-export type WaitToolConfig = boolean | WaitToolConfigObject;
-
 export interface ControlEvent {
 	type: ControlEventType;
 	from?: ActivityState;

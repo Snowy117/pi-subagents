@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, waitForSubagents, type WaitDeps } from "../../src/runs/background/wait.ts";
+import { waitForSubagents, type WaitDeps } from "../../src/runs/background/wait.ts";
 import type { SubagentState } from "../../src/shared/types.ts";
 
 function writeStatus(asyncRoot: string, runId: string, state: string, extra: object = {}): void {
@@ -61,41 +61,7 @@ function baseDeps(root: string, state: SubagentState, overrides: Partial<WaitDep
 	};
 }
 
-describe("wait tool", () => {
-	it("resolves waitTool config and environment overrides strictly", () => {
-		assert.deepEqual(resolveWaitToolConfig(undefined, {}), { enabled: true });
-		assert.deepEqual(resolveWaitToolConfig(false, {}), { enabled: false });
-		assert.deepEqual(resolveWaitToolConfig({ enabled: false }, {}), { enabled: false });
-		assert.deepEqual(resolveWaitToolConfig({ enabled: false }, { [WAIT_TOOL_ENABLED_ENV]: "true" }), { enabled: true });
-		assert.deepEqual(resolveWaitToolConfig(true, { [WAIT_TOOL_ENABLED_ENV]: "off" }), { enabled: false });
-		assert.throws(() => resolveWaitToolConfig("false" as never, {}), /config\.waitTool/);
-		assert.throws(() => resolveWaitToolConfig({ enabled: "false" } as never, {}), /config\.waitTool\.enabled/);
-		assert.throws(() => resolveWaitToolConfig(undefined, { [WAIT_TOOL_ENABLED_ENV]: "maybe" }), /PI_SUBAGENT_WAIT_TOOL_ENABLED/);
-	});
-
-	it("returns immediately without polling when waitTool is disabled", async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-disabled-"));
-		try {
-			const asyncRoot = path.join(root, "runs");
-			const state = makeState("sess-1");
-			writeStatus(asyncRoot, "run-a", "running", { sessionId: "sess-1", pid: 999999 });
-			let slept = false;
-			const result = await waitForSubagents({}, undefined, baseDeps(root, state, {
-				enabled: false,
-				sleep: async () => {
-					slept = true;
-					throw new Error("disabled wait should not sleep");
-				},
-			}));
-
-			assert.equal(result.isError, undefined);
-			assert.match(textOf(result), /disabled/i);
-			assert.match(textOf(result), /without blocking/i);
-			assert.equal(slept, false);
-		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-	});
+describe("integrated wait", () => {
 
 	it("returns immediately when there is nothing to wait for", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-empty-"));
@@ -308,25 +274,27 @@ describe("wait tool", () => {
 		}
 	});
 
-	it("times out while runs are still active and reports them", async () => {
+	it("remains pending indefinitely until a run becomes terminal", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-timeout-"));
 		try {
 			const asyncRoot = path.join(root, "runs");
 			const state = makeState("sess-1");
 			writeStatus(asyncRoot, "run-stuck", "running", { sessionId: "sess-1", pid: 999999 });
 
-			// Virtual clock that jumps past the timeout on the first sleep.
 			let clock = 0;
 			const now = () => clock;
+			let polls = 0;
 			const sleep = async (ms: number) => {
 				clock += ms + 10_000;
+				polls++;
+				if (polls === 3) writeStatus(asyncRoot, "run-stuck", "complete", { sessionId: "sess-1" });
 			};
 
-			const result = await waitForSubagents({ timeoutMs: 5_000 }, undefined, baseDeps(root, state, { now, sleep }));
-			assert.equal(result.isError, true);
+			const result = await waitForSubagents({}, undefined, baseDeps(root, state, { now, sleep }));
+			assert.equal(result.isError, undefined);
 			const text = textOf(result);
-			assert.match(text, /timed out/i);
-			assert.match(text, /run-stuck \(running\)/);
+			assert.doesNotMatch(text, /timed out/i);
+			assert.equal(polls, 3);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
