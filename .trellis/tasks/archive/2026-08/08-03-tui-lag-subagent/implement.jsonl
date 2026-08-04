@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/typescript/index.md", "reason": "Package spec index: pre-development checklist and quality gates for TypeScript code in this repo"}
+{"file": ".trellis/spec/typescript/error-and-io-guidelines.md", "reason": "Async/sync fs usage, timer lifecycle, atomic writes — relevant to pollers, timers, and snapshot changes"}
+{"file": ".trellis/spec/typescript/testing-guidelines.md", "reason": "Unit/integration test conventions for the render/execution/tracker code being changed"}
+{"file": ".trellis/tasks/08-03-tui-lag-subagent/research/tui-lag-analysis.md", "reason": "Measured evidence of the lag drivers and the exact hot paths to fix"}

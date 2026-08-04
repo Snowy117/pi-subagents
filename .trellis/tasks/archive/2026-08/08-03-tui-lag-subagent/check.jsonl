@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/typescript/index.md", "reason": "Quality check entry point for the package spec"}
+{"file": ".trellis/spec/typescript/quality-guidelines.md", "reason": "Quality verification criteria for the changed render/execution code"}
+{"file": ".trellis/spec/typescript/testing-guidelines.md", "reason": "Test expectations for the changed modules"}
+{"file": ".trellis/tasks/08-03-tui-lag-subagent/research/tui-lag-analysis.md", "reason": "Background for verifying the fixes target the right hot paths"}
