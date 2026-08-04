@@ -14,9 +14,6 @@ import type { AsyncRunSummary } from "../async-status.ts";
 export interface AsyncJobTrackerOptions {
 	completionRetentionMs?: number;
 	pollIntervalMs?: number;
-	/** Minimum gap between poller-driven widget re-renders; terminal state
-	 *  transitions and job-set changes render immediately regardless. */
-	widgetRenderThrottleMs?: number;
 	resultsDir?: string;
 	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
 	now?: () => number;
@@ -26,12 +23,7 @@ export const CONTROL_EVENT_READ_CHUNK_BYTES = 64 * 1024;
 export const MAX_CONTROL_EVENT_LINE_BYTES = 1024 * 1024;
 export const CONTROL_EVENT_SCAN_WINDOW_BYTES = 2 * 1024 * 1024;
 
-// Tracker-local defaults. Deliberately NOT the shared POLL_INTERVAL_MS (250ms)
-// used by the runner's control channel: the parent-side async job poller reads
-// status.json synchronously on the TUI thread, so it polls half as often and
-// throttles widget re-renders to keep the TUI responsive while jobs run.
 export const JOB_TRACKER_POLL_INTERVAL_MS = 500;
-export const JOB_TRACKER_WIDGET_RENDER_THROTTLE_MS = 500;
 
 export function restoredControlEventCursor(asyncDir: string): number {
 	try {

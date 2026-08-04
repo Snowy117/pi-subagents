@@ -80,6 +80,7 @@ async function waitForCondition(
 
 function createUiContext() {
 	const widgets: unknown[] = [];
+	const statuses: Array<string | undefined> = [];
 	let renderRequests = 0;
 	const ctx = {
 		hasUI: true,
@@ -90,6 +91,9 @@ function createUiContext() {
 			setWidget: (_key: string, value: unknown) => {
 				widgets.push(value);
 			},
+			setStatus: (_key: string, value: string | undefined) => {
+				statuses.push(value);
+			},
 			requestRender: () => {
 				renderRequests += 1;
 			},
@@ -99,6 +103,9 @@ function createUiContext() {
 		ctx,
 		get widgets() {
 			return widgets;
+		},
+		get statuses() {
+			return statuses;
 		},
 		get renderRequests() {
 			return renderRequests;

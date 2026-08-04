@@ -20,16 +20,20 @@ function renderCall(config: { asyncByDefault?: boolean; forceTopLevelAsync?: boo
 }
 
 describe("subagent tool call rendering", () => {
-	it("renders the async badge for an explicit detached call", () => {
-		assert.match(renderCall({}, { tasks: [{ agent: "delegate" }], async: true }), /\[async\]/);
+	it("does not render an async badge for detached calls", () => {
+		assert.equal(renderCall({}, { tasks: [{ agent: "delegate" }], async: true }), "subagent delegate");
 	});
 
-	it("uses asyncByDefault only when the caller does not explicitly choose a policy", () => {
-		assert.match(renderCall({ asyncByDefault: true }, { tasks: [{ agent: "delegate" }] }), /\[async\]/);
-		assert.doesNotMatch(renderCall({ asyncByDefault: true }, { tasks: [{ agent: "delegate" }], async: false }), /\[async\]/);
+	it("keeps call rendering independent of configured detach policy", () => {
+		assert.equal(renderCall({ asyncByDefault: true }, { tasks: [{ agent: "delegate" }] }), "subagent delegate");
+		assert.equal(renderCall({ asyncByDefault: true }, { tasks: [{ agent: "delegate" }], async: false }), "subagent delegate");
 	});
 
-	it("renders the async badge when top-level detachment is forced", () => {
-		assert.match(renderCall({ forceTopLevelAsync: true }, { tasks: [{ agent: "delegate" }], async: false }), /\[async\]/);
+	it("keeps forced top-level detachment out of the call label", () => {
+		assert.equal(renderCall({ forceTopLevelAsync: true }, { tasks: [{ agent: "delegate" }], async: false }), "subagent delegate");
+	});
+
+	it("keeps the parallel cardinality label without an async badge", () => {
+		assert.equal(renderCall({}, { tasks: [{ agent: "worker" }, { agent: "reviewer", count: 2 }], async: true }), "subagent parallel (3)");
 	});
 });

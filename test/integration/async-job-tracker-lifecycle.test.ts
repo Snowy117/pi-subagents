@@ -80,6 +80,7 @@ async function waitForCondition(
 
 function createUiContext() {
 	const widgets: unknown[] = [];
+	const statuses: Array<string | undefined> = [];
 	let renderRequests = 0;
 	const ctx = {
 		hasUI: true,
@@ -90,6 +91,9 @@ function createUiContext() {
 			setWidget: (_key: string, value: unknown) => {
 				widgets.push(value);
 			},
+			setStatus: (_key: string, value: string | undefined) => {
+				statuses.push(value);
+			},
 			requestRender: () => {
 				renderRequests += 1;
 			},
@@ -99,6 +103,9 @@ function createUiContext() {
 		ctx,
 		get widgets() {
 			return widgets;
+		},
+		get statuses() {
+			return statuses;
 		},
 		get renderRequests() {
 			return renderRequests;
@@ -124,14 +131,15 @@ describe("async job tracker lifecycle and restore", { skip: !available ? "pi pac
 			await new Promise((resolve) => setTimeout(resolve, 40));
 
 			assert.equal(state.asyncJobs.size, 0);
-			assert.ok(ui.renderRequests > 0, "expected widget cleanup to request a rerender");
+			assert.ok(ui.renderRequests > 0, "expected status cleanup to request a rerender");
 			assert.equal(ui.widgets.at(-1), undefined);
+			assert.equal(ui.statuses.at(-1), undefined);
 		} finally {
 			removeTempDir(asyncRoot);
 		}
 	});
 
-	it("restores active async runs into the widget after reset", async () => {
+	it("restores active async runs into the status bar after reset", async () => {
 		const asyncRoot = createTempDir("pi-async-job-restore-");
 		try {
 			const runDir = path.join(asyncRoot, "run-restored");
@@ -187,8 +195,9 @@ describe("async job tracker lifecycle and restore", { skip: !available ? "pi pac
 			assert.equal(job.completedSteps, 0);
 			assert.equal(job.activeParallelGroup, true);
 			assert.ok(state.poller, "expected restored active jobs to start polling");
-			assert.ok(ui.renderRequests >= 2, "expected reset and restore to request widget renders");
-			assert.equal(typeof ui.widgets.at(-1), "function", "expected restored jobs to render the widget");
+			assert.ok(ui.renderRequests >= 2, "expected reset and restore to request status renders");
+			assert.equal(ui.widgets.at(-1), undefined, "expected the editor-top widget to remain cleared");
+			assert.equal(ui.statuses.at(-1), "2 background subagents");
 
 			await new Promise((resolve) => setTimeout(resolve, 30));
 			assert.equal(recorder.events.length, 0, "historical control events should not be replayed during restore");
@@ -293,7 +302,7 @@ describe("async job tracker lifecycle and restore", { skip: !available ? "pi pac
 		}
 	});
 
-	it("uses flattened async-start agents for initial parallel group widget state", () => {
+	it("uses flattened async-start agents for initial parallel group state", () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {
 			const state = createState();
@@ -373,7 +382,7 @@ describe("async job tracker lifecycle and restore", { skip: !available ? "pi pac
 		}
 	});
 
-	it("rerenders changed polled status but not unchanged bookkeeping", async () => {
+	it("rerenders only when the background subagent count changes", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {
 			const runDir = path.join(asyncRoot, "run-unchanged");
@@ -400,7 +409,7 @@ describe("async job tracker lifecycle and restore", { skip: !available ? "pi pac
 
 			const requestsAfterStart = ui.renderRequests;
 			await new Promise((resolve) => setTimeout(resolve, 35));
-			assert.ok(ui.renderRequests > requestsAfterStart, "first status load should redraw the widget");
+			assert.equal(ui.renderRequests, requestsAfterStart, "loading detail for the same count should not redraw the status bar");
 
 			const requestsAfterStatusLoaded = ui.renderRequests;
 			fs.writeFileSync(path.join(runDir, "events.jsonl"), `${JSON.stringify({
@@ -417,14 +426,26 @@ describe("async job tracker lifecycle and restore", { skip: !available ? "pi pac
 			})}\n`, "utf-8");
 			await new Promise((resolve) => setTimeout(resolve, 40));
 			assert.equal(recorder.events.some((event) => event.channel === "subagent:control-event"), true);
-			assert.equal(ui.renderRequests, requestsAfterStatusLoaded, "unchanged status and control cursors should not request widget redraws");
+			assert.equal(ui.renderRequests, requestsAfterStatusLoaded, "unchanged status and control cursors should not request status redraws");
 
 			writeStatus(3000, 1);
 			await new Promise((resolve) => setTimeout(resolve, 40));
-			assert.equal(ui.renderRequests, requestsAfterStatusLoaded, "non-terminal status change is throttled (no immediate redraw)");
+			assert.equal(ui.renderRequests, requestsAfterStatusLoaded, "detail-only status changes should not redraw the count");
 
-			await new Promise((resolve) => setTimeout(resolve, 520));
-			assert.ok(ui.renderRequests > requestsAfterStatusLoaded, "changed non-terminal status redraws the widget after the throttle window");
+			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-unchanged",
+				mode: "parallel",
+				state: "running",
+				startedAt: 1000,
+				lastUpdate: 4000,
+				steps: [
+					{ agent: "worker", status: "running", startedAt: 1000 },
+					{ agent: "reviewer", status: "running", startedAt: 2000 },
+				],
+			}), "utf-8");
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.ok(ui.renderRequests > requestsAfterStatusLoaded, "a changed background count should redraw the status bar");
+			assert.equal(ui.statuses.at(-1), "2 background subagents");
 		} finally {
 			removeTempDir(asyncRoot);
 		}

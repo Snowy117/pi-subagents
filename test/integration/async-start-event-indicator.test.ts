@@ -49,7 +49,7 @@ function createState(): SubagentState {
 	};
 }
 
-describe("async start event indicator", { skip: !available ? "pi packages not available" : undefined }, () => {
+describe("async start event background status", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
 	const runIds = new Set<string>();
@@ -175,21 +175,24 @@ describe("async start event indicator", { skip: !available ? "pi packages not av
 		assert.equal(events.filter((event) => event.channel === SUBAGENT_ASYNC_STARTED_EVENT).length, 0);
 	});
 
-	it("mounts the editor-top widget from a public dispatch before any result event", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("updates the status bar from a public dispatch before any result event", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 		const state = createState();
 		const eventBus = createEventBus();
 		const mounted: Array<{ key: string; widget: unknown }> = [];
+		const statuses: Array<{ key: string; value: string | undefined }> = [];
 		const ctx = makeMinimalCtx(tempDir) as ReturnType<typeof makeMinimalCtx> & {
 			hasUI: true;
 			ui: {
 				setWidget: (key: string, widget: unknown) => void;
+				setStatus: (key: string, value: string | undefined) => void;
 				requestRender: () => void;
 			};
 		};
 		ctx.hasUI = true;
 		ctx.ui = {
 			setWidget(key, widget) { mounted.push({ key, widget }); },
+			setStatus(key, value) { statuses.push({ key, value }); },
 			requestRender() {},
 		};
 		state.lastUiContext = ctx as never;
@@ -226,10 +229,8 @@ describe("async start event indicator", { skip: !available ? "pi packages not av
 			runIds.add(runId!);
 			assert.equal(result.isError, undefined);
 			assert.ok(state.asyncJobs.has(runId!), "start event should populate tracker state");
-			assert.ok(
-				mounted.some((entry) => entry.key === WIDGET_KEY && entry.widget !== undefined),
-				"start event should mount the editor-top widget before tool_result or completion",
-			);
+			assert.equal(mounted.at(-1)?.widget, undefined, "start event should keep the editor-top widget cleared");
+			assert.ok(statuses.some((entry) => entry.key === WIDGET_KEY && entry.value === "2 background subagents"));
 
 			await waitForAsyncResultFile(runId!, 10_000);
 		} finally {

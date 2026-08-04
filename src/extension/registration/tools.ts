@@ -20,12 +20,6 @@ interface RegisterSubagentToolsOptions {
 	execute: ExecuteFn;
 }
 
-export function resolveCallerDetachPolicy(args: { async?: boolean }, config: Pick<ExtensionConfig, "asyncByDefault" | "forceTopLevelAsync">): boolean {
-	if (config.forceTopLevelAsync === true) return true;
-	if (args.async !== undefined) return args.async === true;
-	return config.asyncByDefault === true;
-}
-
 // Drives the inline running-indicator braille animation for foreground subagent
 // results. Foreground runs receive progress only on child events, so the glyph
 // (derived from progress fields) would freeze between events. While a result is
@@ -82,16 +76,15 @@ export function registerSubagentTools(pi: ExtensionAPI, options: RegisterSubagen
 			}
 			const parallelCount = effectiveParallelTaskCount(args.tasks as Array<{ count?: unknown }> | undefined);
 			const isParallel = parallelCount > 1;
-			const asyncLabel = resolveCallerDetachPolicy(args, config) ? theme.fg("warning", " [async]") : "";
 			if (isParallel)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${parallelCount})${asyncLabel}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${parallelCount})`,
 					0,
 					0,
 				);
 			const agent = args.tasks?.[0]?.agent || "delegate";
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", agent)}${asyncLabel}`,
+				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", agent)}`,
 				0,
 				0,
 			);

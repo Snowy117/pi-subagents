@@ -92,7 +92,7 @@ describe("subagent extension child mode", () => {
 			if (!registeredTool) throw new Error("tool not registered");
 			const theme = { fg(_name, text) { return text; }, bold(text) { return text; } };
 			const asyncParallel = registeredTool.renderCall({ tasks: [{ agent: "worker" }, { agent: "reviewer", count: 2 }], async: true }, theme).text;
-			if (!asyncParallel.includes("parallel (3) [async]")) throw new Error("expected async parallel badge, got " + asyncParallel);
+			if (asyncParallel !== "subagent parallel (3)") throw new Error("expected parallel label without async badge, got " + asyncParallel);
 		`;
 
 		execFileSync(

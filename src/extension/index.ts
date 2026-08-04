@@ -4,7 +4,7 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { discoverAgents } from "../agents/agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
-import { renderWidget } from "../tui/render.ts";
+import { renderBackgroundSubagentStatus } from "../tui/render.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createRpcChildRegistry } from "../runs/persistent/rpc-child-registry.ts";
 import { listAsyncRuns } from "../runs/background/async-status.ts";
@@ -202,6 +202,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		steerView.dispose();
 		hostEditorConversation.dispose();
 		clearInterval(evictionTimer);
+		try {
+			if (state.lastUiContext?.hasUI) {
+				state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
+				state.lastUiContext.ui.setStatus(WIDGET_KEY, undefined);
+			}
+		} catch (error) {
+			if (!isStaleExtensionContextError(error)) throw error;
+		}
 	};
 	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
@@ -284,7 +292,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return;
 		state.lastUiContext = ctx;
 		if (state.asyncJobs.size > 0) {
-			renderWidget(ctx, Array.from(state.asyncJobs.values()));
+			renderBackgroundSubagentStatus(ctx, Array.from(state.asyncJobs.values()), (runId, sessionId) => state.completionBroker?.isOwned(runId, sessionId) ?? false);
 			ctx.ui.requestRender?.();
 			ensurePoller();
 		}
@@ -375,6 +383,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		try {
 			if (state.lastUiContext?.hasUI) {
 				state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
+				state.lastUiContext.ui.setStatus(WIDGET_KEY, undefined);
 			}
 		} catch (error) {
 			if (!isStaleExtensionContextError(error)) throw error;
