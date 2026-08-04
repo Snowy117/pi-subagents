@@ -25,9 +25,13 @@ import { modelThinkingBadge, widgetStepGlyph, widgetStepStatus } from "./widget-
 import { Container, Markdown, Spacer, Text, getMarkdownTheme } from "./render.ts";
 
 function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme, frame?: number): Component {
-	const output = r.truncation?.text || getSingleResultOutput(r);
-	const progress = r.progress || r.progressSummary;
 	const isRunning = r.progress?.status === "running";
+	// While running, the compact view never displays the accumulated transcript
+	// output; resolving it scans the whole child transcript per frame (the lag
+	// hot path). Compute it only for the completed view — the cheap truncation
+	// text stays available either way.
+	const output = isRunning ? undefined : (r.truncation?.text || getSingleResultOutput(r));
+	const progress = r.progress || r.progressSummary;
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const stats = statJoin(theme, [
 		r.usage?.turns ? `⟳ ${r.usage.turns}` : "",
@@ -36,7 +40,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const c = new Container();
 	const width = getTermWidth() - 4;
 	const modelDisplay = modelThinkingBadge(theme, r.model);
-	c.addChild(new Text(truncLine(`${resultGlyph(r, output, theme, isRunning, undefined, frame)} ${theme.fg("toolTitle", theme.bold(r.agent))}${modelDisplay}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
+	c.addChild(new Text(truncLine(`${resultGlyph(r, output ?? "", theme, isRunning, undefined, frame)} ${theme.fg("toolTitle", theme.bold(r.agent))}${modelDisplay}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
 
 	if (isRunning && r.progress) {
 		const progressSnapshotNow = snapshotNowForProgress(r.progress);
@@ -125,14 +129,17 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 			c.addChild(new Text(truncLine(theme.fg("dim", `  ◦ ${pendingLabel}: ${agentName} · pending`), width), 0, 0));
 			continue;
 		}
-		const output = getSingleResultOutput(r);
 		const progressFromArray = d.progress?.find((p) => p.index === i) || d.progress?.find((p) => p.agent === r.agent && p.status === "running");
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
+		// Running/pending rows never display the accumulated transcript output;
+		// scanning messages per frame is the lag hot path. Resolve it only for
+		// rows whose completed view will show it.
+		const output = rRunning || rPending ? undefined : getSingleResultOutput(r);
 		const stepNumber = r.progress?.index !== undefined ? r.progress.index + 1 : progressFromArray?.index !== undefined ? progressFromArray.index + 1 : i + 1;
 		const stepStats = formatProgressStats(theme, rProg);
-		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning, progressRunningSeed(rProg), frame);
+		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output ?? "", theme, rRunning, progressRunningSeed(rProg), frame);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		const stepLabel = resultRowLabel(d, multiLabel, i, stepNumber);
 		const line = `${glyph} ${stepLabel}: ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
@@ -141,8 +148,8 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 			const activity = compactCurrentActivity(rProg);
 			c.addChild(new Text(truncLine(theme.fg("dim", `    ⎿  ${activity}`), width), 0, 0));
 			c.addChild(new Text(truncLine(theme.fg("accent", `    ${liveDetailHintText()}`), width), 0, 0));
-		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
-			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
+		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output ?? ""))) {
+			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    ⎿  ${resultStatusLine(r, output ?? "")}`), width), 0, 0));
 		}
 		const outputTarget = extractOutputTarget(r.task);
 		if (outputTarget) c.addChild(new Text(truncLine(theme.fg("dim", `    output: ${outputTarget}`), width), 0, 0));

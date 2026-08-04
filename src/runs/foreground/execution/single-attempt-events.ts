@@ -30,7 +30,9 @@ export function attachEventHandlers(state: SingleAttemptState): void {
 	state.emitUpdateSnapshot = (text: string) => {
 		if (!state.options.onUpdate || state.processClosed) return;
 		const progressSnapshot = snapshotProgress(state.progress);
-		const resultSnapshot = snapshotResult(state.result, progressSnapshot);
+		// Per-child-event snapshots must not copy the full messages array (the
+		// O(transcript) update hot path); the final snapshot still includes it.
+		const resultSnapshot = snapshotResult(state.result, progressSnapshot, false);
 		const controlEvents = state.drainPendingControlEvents();
 		state.options.onUpdate({
 			content: [{ type: "text", text }],

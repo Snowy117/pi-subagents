@@ -5,7 +5,6 @@ import { renderWidget, widgetRenderKey } from "../../../tui/render.ts";
 import {
 	type AsyncStartedEvent,
 	type SubagentState,
-	POLL_INTERVAL_MS,
 	RESULTS_DIR,
 } from "../../../shared/types.ts";
 import { readStatus } from "../../../shared/utils.ts";
@@ -13,7 +12,7 @@ import { normalizeParallelGroups } from "../parallel-groups.ts";
 import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "../stale-run-reconciler.ts";
 import { hasLiveNestedDescendants, updateAsyncJobNestedProjection } from "../../shared/nested-events.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "../async-status.ts";
-import { type AsyncJobTrackerOptions, emitNewControlEvents, summaryToJob } from "./helpers.ts";
+import { type AsyncJobTrackerOptions, emitNewControlEvents, summaryToJob, JOB_TRACKER_POLL_INTERVAL_MS, JOB_TRACKER_WIDGET_RENDER_THROTTLE_MS } from "./helpers.ts";
 import { cleanupForegroundLiveChildren } from "../../foreground/foreground-live-registry.ts";
 
 export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, asyncDirRoot: string, options: AsyncJobTrackerOptions = {}): {
@@ -24,7 +23,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	restoreActiveJobs: (ctx?: ExtensionContext) => void;
 } {
 	const completionRetentionMs = options.completionRetentionMs ?? 10000;
-	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
+	const pollIntervalMs = options.pollIntervalMs ?? JOB_TRACKER_POLL_INTERVAL_MS;
+	const widgetRenderThrottleMs = options.widgetRenderThrottleMs ?? JOB_TRACKER_WIDGET_RENDER_THROTTLE_MS;
 	const resultsDir = options.resultsDir ?? RESULTS_DIR;
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
 		renderWidget(ctx, jobs);
@@ -50,6 +50,11 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 
 	const ensurePoller = () => {
 		if (state.poller) return;
+		let lastWidgetRenderAt = 0;
+		// Sticky dirty flag: a status change blocked by the render throttle must
+		// still draw on a later tick once the throttle window elapses (a plain
+		// per-tick comparison would lose the update forever on the next tick).
+		let pendingWidgetChange = false;
 		state.poller = setInterval(() => {
 			if (state.asyncJobs.size === 0) {
 				if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext, []);
@@ -61,6 +66,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			}
 
 			let widgetChanged = false;
+			let terminalTransition = false;
+			const jobCountBefore = state.asyncJobs.size;
 			for (const job of state.asyncJobs.values()) {
 				const widgetStateBefore = widgetRenderKey(job);
 				let nestedRefreshFailed = false;
@@ -150,6 +157,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						if ((job.status === "complete" || job.status === "failed" || job.status === "paused") && !nestedRefreshFailed && !hasLiveNestedDescendants(job.nestedChildren) && (previousStatus !== job.status || !state.cleanupTimers.has(job.asyncId))) {
 							scheduleCleanup(job.asyncId);
 						}
+						if (previousStatus !== job.status && (job.status === "complete" || job.status === "failed" || job.status === "paused")) {
+							// Terminal transitions render the widget immediately (not throttled).
+							terminalTransition = true;
+						}
 						if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 						continue;
 					}
@@ -162,6 +173,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						console.error(`Failed to read async status for '${job.asyncDir}':`, error);
 						job.status = "failed";
 						job.updatedAt = Date.now();
+						// A read failure flips the job to a terminal state: render immediately.
+						terminalTransition = true;
 					}
 					if (!hasLiveNestedDescendants(job.nestedChildren) && !state.cleanupTimers.has(job.asyncId)) {
 						scheduleCleanup(job.asyncId);
@@ -170,7 +183,17 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 			}
 
-			if (widgetChanged && state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
+			if (widgetChanged) pendingWidgetChange = true;
+
+			const jobSetChanged = state.asyncJobs.size !== jobCountBefore;
+			if (pendingWidgetChange && state.lastUiContext?.hasUI) {
+				const now = options.now ? options.now() : Date.now();
+				if (terminalTransition || jobSetChanged || now - lastWidgetRenderAt >= widgetRenderThrottleMs) {
+					lastWidgetRenderAt = now;
+					pendingWidgetChange = false;
+					rerenderWidget(state.lastUiContext);
+				}
+			}
 		}, pollIntervalMs);
 		state.poller.unref?.();
 	};

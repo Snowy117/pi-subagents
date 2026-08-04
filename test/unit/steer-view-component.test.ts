@@ -105,6 +105,19 @@ describe("SteerViewComponent", () => {
 		component.dispose();
 	});
 
+	it("does not request a render on an idle poll with no new records", () => {
+		const { component, renders } = harness();
+		// Construction polls once and renders the seeded record.
+		const afterConstruction = renders();
+		assert.ok(afterConstruction >= 1);
+		// No new transcript records, no pending action responses: idle poll
+		// must not force a full TUI render.
+		component.poll();
+		component.poll();
+		assert.equal(renders(), afterConstruction);
+		component.dispose();
+	});
+
 	it("scrolls through a single Markdown message that wraps to many terminal rows", () => {
 		const { component, transcriptPath } = harness();
 		fs.appendFileSync(transcriptPath, `${JSON.stringify({

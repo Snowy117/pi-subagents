@@ -61,10 +61,14 @@ export function snapshotProgress(progress: AgentProgress): AgentProgress {
 	};
 }
 
-export function snapshotResult(result: SingleResult, progress: AgentProgress): SingleResult {
+export function snapshotResult(result: SingleResult, progress: AgentProgress, includeMessages = true): SingleResult {
 	return {
 		...result,
-		messages: result.outputMode === "file-only" && result.savedOutputPath ? undefined : result.messages ? [...result.messages] : undefined,
+		// Per-event streaming snapshots (emitUpdateSnapshot) omit the full child
+		// transcript: copying it per child event is O(transcript) work on the
+		// update hot path. Final snapshots keep messages so the final result
+		// contract (renderers, consumers) is unchanged.
+		messages: !includeMessages ? undefined : (result.outputMode === "file-only" && result.savedOutputPath ? undefined : result.messages ? [...result.messages] : undefined),
 		usage: { ...result.usage },
 		skills: result.skills ? [...result.skills] : undefined,
 		attemptedModels: result.attemptedModels ? [...result.attemptedModels] : undefined,

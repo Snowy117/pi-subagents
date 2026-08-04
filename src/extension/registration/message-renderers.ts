@@ -32,18 +32,42 @@ function rebuildSlashResultContainer(
 	container.addChild(box);
 }
 
-function createSlashResultComponent(
+/** Injectable deps for the slash child-view renderer (unit tests pass a fake
+ *  clock and a rebuild spy; production defaults are used otherwise). */
+interface SlashResultComponentDeps {
+	now?: () => number;
+	rebuild?: (
+		container: Container,
+		result: AgentToolResult<Details>,
+		options: { expanded: boolean },
+		theme: ExtensionContext["ui"]["theme"],
+	) => void;
+}
+
+/** Slash child-view rebuild throttle: rebuild on version change (real data
+ *  change); while running at most ~1/500ms so live duration labels keep
+ *  ticking without rebuilding the whole result on every render pass (the lag
+ *  hot path); once completed, only version changes rebuild. */
+export function createSlashResultComponent(
 	details: SlashMessageDetails,
 	options: { expanded: boolean },
 	theme: ExtensionContext["ui"]["theme"],
+	deps: SlashResultComponentDeps = {},
 ): Container {
+	const nowImpl = deps.now ?? Date.now;
+	const rebuild = deps.rebuild ?? rebuildSlashResultContainer;
 	const container = new Container();
+	const REBUILD_INTERVAL_MS = 500;
 	let lastVersion = -1;
+	let lastRebuildAt = 0;
 	container.render = (width: number): string[] => {
 		const snapshot = getSlashRenderableSnapshot(details);
-		if (snapshot.version !== lastVersion || isSlashResultRunning(snapshot.result)) {
+		const running = isSlashResultRunning(snapshot.result);
+		const now = nowImpl();
+		if (snapshot.version !== lastVersion || (running && now - lastRebuildAt >= REBUILD_INTERVAL_MS)) {
 			lastVersion = snapshot.version;
-			rebuildSlashResultContainer(container, snapshot.result, options, theme);
+			lastRebuildAt = now;
+			rebuild(container, snapshot.result, options, theme);
 		}
 		return Container.prototype.render.call(container, width);
 	};
@@ -83,10 +107,13 @@ function parseSubagentNotifyContent(content: string): SubagentNotifyDetails | un
 }
 
 class SubagentControlNoticeComponent implements Component {
-	constructor(
-		private readonly details: SubagentControlMessageDetails,
-		private readonly theme: ExtensionContext["ui"]["theme"],
-	) {}
+	private readonly details: SubagentControlMessageDetails;
+	private readonly theme: ExtensionContext["ui"]["theme"];
+
+	constructor(details: SubagentControlMessageDetails, theme: ExtensionContext["ui"]["theme"]) {
+		this.details = details;
+		this.theme = theme;
+	}
 
 	invalidate(): void {}
 

@@ -133,12 +133,22 @@ export class SteerViewComponent implements Component, Focusable {
 	poll(): void {
 		if (this.disposed) return;
 		const refreshed = this.options.refreshTarget?.();
-		if (refreshed) Object.assign(this.target, refreshed);
+		let renderNeeded = false;
+		if (refreshed) {
+			// Header shows agent/status/runId/index; surface changes when the
+			// refreshed target differs, so idle polls do not force a full render.
+			renderNeeded = refreshed.status !== this.target.status
+				|| refreshed.agent !== this.target.agent
+				|| refreshed.runId !== this.target.runId
+				|| refreshed.index !== this.target.index;
+			Object.assign(this.target, refreshed);
+		}
 		if (this.target.transcriptPath && this.target.transcriptPath !== this.tailPath) {
 			this.releaseTranscript();
 			this.tailPath = this.target.transcriptPath;
 			this.tail = createTranscriptTail(this.tailPath, { trustedRoots: trustedRootsForTarget(this.target) });
 			this.releaseTranscript = retainLiveTranscript(this.tailPath);
+			renderNeeded = true;
 		}
 		let update = this.tail?.poll() ?? readTranscriptFallback(this.target);
 		if (update.records.length === 0 && this.records.length === 0) {
@@ -146,13 +156,17 @@ export class SteerViewComponent implements Component, Focusable {
 			if (fallback.records.length > 0) update = fallback;
 		}
 		const wasFollowing = this.scrollOffset === 0;
-		if (update.reset) this.records = [];
+		if (update.reset) {
+			this.records = [];
+			renderNeeded = true;
+		}
 		if (update.records.length > 0) {
 			this.records.push(...update.records);
 			this.feedRecords(update.records, update.reset);
 			if (this.records.length > 1000) this.records.splice(0, this.records.length - 1000);
 			if (wasFollowing) this.scrollOffset = 0;
 			else this.unseen += update.records.length;
+			renderNeeded = true;
 		}
 		for (const requestId of [...this.pendingActions]) {
 			const response = consumeTargetActionResponse(this.target, requestId);
@@ -163,9 +177,16 @@ export class SteerViewComponent implements Component, Focusable {
 				this.thinkingLevel = typeof result?.thinkingLevel === "string" ? result.thinkingLevel : this.thinkingLevel;
 				this.notice = `✓ thinking ${this.thinkingLevel || "updated"}`;
 			} else this.notice = `Thinking rejected: ${response.error}`;
+			renderNeeded = true;
 		}
-		if (update.warnings.length > 0 && this.records.length === 0) this.notice = update.warnings.at(-1)!;
-		this.tui.requestRender();
+		if (update.warnings.length > 0 && this.records.length === 0) {
+			this.notice = update.warnings.at(-1)!;
+			renderNeeded = true;
+		}
+		// Skip the full TUI render on idle polls (no new records, no state
+		// change) — the 250ms poll must not force renders while the child is
+		// quiet. Streaming still renders per record.
+		if (renderNeeded) this.tui.requestRender();
 	}
 
 	private currentTarget(): SteerViewTarget {

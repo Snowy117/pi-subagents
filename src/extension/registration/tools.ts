@@ -29,8 +29,9 @@ export function resolveCallerDetachPolicy(args: { async?: boolean }, config: Pic
 // Drives the inline running-indicator braille animation for foreground subagent
 // results. Foreground runs receive progress only on child events, so the glyph
 // (derived from progress fields) would freeze between events. While a result is
-// running we tick a frame counter + invalidate() every 80ms so renderSubagentResult
-// can blend the frame into runningGlyph and produce a smooth spinner.
+// running we tick a frame counter + invalidate() every 200ms so renderSubagentResult
+// can blend the frame into runningGlyph and produce a smooth spinner without a
+// 12.5fps full-TUI re-render loop.
 function subagentResultIsRunning(result: { details?: Details }): boolean {
 	return result.details?.progress?.some((entry) => entry.status === "running")
 		|| result.details?.results.some((entry) => entry.progress?.status === "running")
@@ -47,7 +48,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 		try {
 			context.invalidate();
 		} catch {}
-	}, 80);
+	}, 200);
 }
 
 export function registerSubagentTools(pi: ExtensionAPI, options: RegisterSubagentToolsOptions): void {

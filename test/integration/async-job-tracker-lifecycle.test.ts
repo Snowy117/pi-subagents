@@ -421,7 +421,10 @@ describe("async job tracker lifecycle and restore", { skip: !available ? "pi pac
 
 			writeStatus(3000, 1);
 			await new Promise((resolve) => setTimeout(resolve, 40));
-			assert.ok(ui.renderRequests > requestsAfterStatusLoaded, "changed non-terminal status should redraw the widget");
+			assert.equal(ui.renderRequests, requestsAfterStatusLoaded, "non-terminal status change is throttled (no immediate redraw)");
+
+			await new Promise((resolve) => setTimeout(resolve, 520));
+			assert.ok(ui.renderRequests > requestsAfterStatusLoaded, "changed non-terminal status redraws the widget after the throttle window");
 		} finally {
 			removeTempDir(asyncRoot);
 		}

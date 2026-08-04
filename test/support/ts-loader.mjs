@@ -74,6 +74,27 @@ export class Container {
     return this.children.flatMap((child) => child.render(width));
   }
 }
+
+export class Box extends Container {
+  constructor(paddingX = 1, paddingY = 1, bgFn) {
+    super();
+    this.paddingX = paddingX;
+    this.paddingY = paddingY;
+    this.bgFn = bgFn;
+  }
+
+  render(width) {
+    const contentWidth = Math.max(1, width - this.paddingX * 2);
+    const leftPad = " ".repeat(this.paddingX);
+    const childLines = [];
+    for (const child of this.children) {
+      for (const line of child.render(contentWidth)) {
+        childLines.push(leftPad + line);
+      }
+    }
+    return childLines;
+  }
+}
 `;
 
 function asDataModule(source) {
