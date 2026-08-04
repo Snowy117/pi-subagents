@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-08-04
+
 ### Breaking
 - Reduced the package-owned slash surface to `/subagents`. The former execution, fleet/doctor/cost, profile, and prompt-workflow slash adapters are no longer registered; use the `subagent` tool actions instead.
 - Removed all seven bundled prompt templates and publish an explicit empty `pi.prompts` list so Pi does not reload them through package-directory convention fallback.
@@ -22,12 +24,13 @@
 - Unified public execution on the detached runner. `async:true` returns the launch receipt; default/`async:false` launches through the same path and waits for the exact generated run ID before reconstructing the full normal result.
 - Canonical execution mode is now based on count-expanded invocation cardinality. Exactly one invocation is `single`; count greater than one or multiple concrete tasks are `parallel` across labels, launch metadata, persisted status, indicators, and results.
 - The native child widget now contributes complete rendered history to root output and terminal scrollback, padding only short transcripts instead of slicing older rows to a moving viewport tail.
-- Every successful detached launch, including sync launch-plus-wait, emits the start lifecycle event immediately so the editor-top active-run indicator appears before completion.
+- Every successful detached launch emits the start lifecycle event immediately. The status bar now reports only active background subagents; synchronous launch-plus-wait calls are excluded while their wait remains owned.
 - The degraded full-screen overlay (`SteerViewComponent`) now renders its transcript through the same native assembler as the host-editor widget with an explicit “conversation continuity unavailable” header; the self-drawn Markdown/`▶ tool`/`✓ tool` message lines are removed. Steer, shift-tab thinking, scrolling, and Input behaviors are unchanged.
 - Updated the bundled `pi-subagents` skill so Fable mode is the default orchestration posture for complex work, and refreshed recent command/config guidance.
 - Documented `contact_supervisor` structured interview requests in the default child bridge instructions.
 
 ### Fixed
+- Removed the async badge from subagent tool-call rendering and retired the editor-top async indicator, avoiding synchronous calls being presented as async work.
 - Fix the interactive child conversation view: the host-editor transcript widget now shows the selected child's real conversation (seeded from its transcript, streaming follow-up responses live) instead of an empty strip, and the footer status line indicates the active child while child mode is open.
 - When a selected child's RPC process ends (failed run, timeout, crash, eviction), child conversation mode auto-closes so editor input returns to the parent — routed messages no longer silently dead-end into a dead child. Failed runs are also evicted from the resident-child registry so they cannot be re-selected as dead conversations.
 - Preserve async resume model/thinking metadata for live, completed, and result-only child runs, and repair stale status metadata from final results. Thanks to BoxChen (@nishuzumi) for #403.

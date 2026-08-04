@@ -1,17 +1,20 @@
 {
-  "name": "pi-subagents",
-  "version": "0.34.0",
+  "name": "@snowy117/pi-subagents",
+  "version": "0.35.0",
   "description": "Pi extension for delegated single and parallel subagent sessions with native child chat and detached execution",
   "author": "Nico Bailon",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicobailon/pi-subagents.git"
+    "url": "git+https://github.com/Snowy117/pi-subagents.git"
   },
-  "homepage": "https://github.com/nicobailon/pi-subagents#readme",
+  "homepage": "https://github.com/Snowy117/pi-subagents#readme",
   "bugs": {
-    "url": "https://github.com/nicobailon/pi-subagents/issues"
+    "url": "https://github.com/Snowy117/pi-subagents/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "pi-package",

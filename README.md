@@ -1,5 +1,5 @@
 <p>
-  <img src="banner.png" alt="pi-subagents" width="1100">
+  <img src="https://raw.githubusercontent.com/Snowy117/pi-subagents/main/banner.png" alt="pi-subagents" width="1100">
 </p>
 
 # pi-subagents
