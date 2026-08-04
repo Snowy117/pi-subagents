@@ -132,3 +132,13 @@ and deterministic so `npm test` is a tight feedback loop.
 - **Misaligned file names** — `foo.ts` must be tested by `foo.test.ts` in the
   matching tier.
 - **Big monolithic `it` blocks** — split into focused, sentence-named `it`s.
+- **Importing strip-incompatible source in a unit test** — the unit tier runs
+  `--experimental-strip-types` only (no transform). Any imported module that
+  uses TypeScript *parameter properties* (`constructor(private x: T)`) or other
+  transform-only syntax fails the whole test file. Use explicit field
+  declarations + assignment in source that unit tests import, or the module
+  cannot be unit-tested (integration tier transforms instead).
+- **Throttled-render logic without an injectable clock** — verify throttle
+  cadence (e.g. slash-result rebuild ≤ 1/500 ms) by injecting `now`/`rebuild`
+  deps and a fake clock; never sleep real time in a unit test to test
+  throttling.

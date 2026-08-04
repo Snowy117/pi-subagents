@@ -545,4 +545,42 @@ rpc.write.write({ type: "prompt", message: task });
 state.fireUpdate();
 ```
 
+## 17. TUI render frequency contract
+
+Pi's `requestRender()` renders the whole component tree and diffs output lines.
+Cached tree renders are cheap (~0.05 ms), but **invalidated renders (markdown
+re-parse) cost ~100 ms per 150 messages**, and a tool result's
+`context.invalidate()` both rebuilds the result component and triggers a full
+`requestRender()`. While subagents run, the extension must not drive the TUI
+render loop at high frequency with per-frame work that grows with the child
+transcript.
+
+### Rules (all render drivers)
+
+- **No O(child transcript) work per frame.** While a result is running, never
+  call `getFinalOutput` / `getSingleResultOutput` in the render path — the
+  running compact view does not display that output (it is only needed for the
+  completed view). Lazy-compute it for non-running rows only.
+- **Per-event snapshots omit `messages`.** `snapshotResult(result, progress,
+  includeMessages = true)` — `emitUpdateSnapshot` (per child event) passes
+  `false`; final snapshots (`finalizeSingleAttempt`, `onDetachedExit`) keep the
+  default. The final result contract is unchanged.
+- **Throttle render drivers.** Foreground spinner animation interval ≤ 200 ms
+  (not 80 ms — a 12.5 fps full re-render loop for the whole run). Async job
+  poller uses tracker-local `JOB_TRACKER_POLL_INTERVAL_MS = 500` — deliberately
+  NOT the shared `POLL_INTERVAL_MS` (250 ms) used by the runner's control
+  channel. Widget re-renders are throttled to ≥ 500 ms except terminal
+  transitions and job-set changes.
+- **Throttled rebuilds need a sticky dirty flag.** A per-tick
+  changed-compare loses an update that was blocked by the throttle (the next
+  tick sees no delta and never renders). Accumulate `pendingWidgetChange`
+  outside the tick and clear it only when a render actually happens.
+- **Version-change-or-throttle rebuild.** Scrollback child views rebuild on a
+  snapshot version change (real data change) and at most ~1/500 ms while
+  running (live duration labels); completed views rebuild on version change
+  only. Use an injectable `now`/`rebuild` so unit tests can verify the cadence.
+- **Skip idle renders.** Poll-driven views (steer view) must not call
+  `requestRender()` when nothing changed (no new records, no pending action
+  responses, no header/notice change).
+
 **Language**: All documentation is written in English.

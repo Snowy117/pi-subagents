@@ -52,6 +52,9 @@ must be followed by hand**. Reviewers compare against the existing code.
 | Bare `catch {}` with no comment | Reviewers can't tell if suppression is safe | add an explanatory comment |
 | Branching on `error.message` | Brittle, locale-dependent | branch on `.code` |
 | Spawning child without stdio guard | Stuck child hangs the extension | `attachPostExitStdioGuard` |
+| O(transcript) work in a per-frame render hot path | Full TUI renders at animation/poll cadence re-scan the whole child transcript | lazy-compute output for non-running rows only; cache on data change |
+| Unthrottled render drivers while a subagent runs | 80 ms spinner invalidates → 12.5 fps full re-renders; 250 ms pollers + sync fs reads on the TUI thread | animation ≤ 200 ms; pollers ≥ 500 ms; widget re-renders throttled except terminal transitions |
+| Per-event snapshots carrying the full `messages` array | O(transcript) copy on every child event | `snapshotResult(result, progress, false)` per event; final snapshots keep messages |
 | `any` for external payloads | No type safety | `unknown` / TypeBox schema |
 | Adding to a large file in `runs/background/` | That module is intentionally many small files | new focused file |
 | Frontend-style scaffolding (components/pages/hooks/store) | This is a Node CLI, not a web app | domain-organized modules |
