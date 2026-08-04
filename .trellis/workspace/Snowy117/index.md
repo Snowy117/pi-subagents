@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-08-02
+- **Total Sessions**: 8
+- **Last Active**: 2026-08-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~418 | Active |
+| `journal-1.md` | ~461 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-08-04 | Fix TUI lag while subagents run | `ffb4ec9`, `db2be90` | `main` |
 | 7 | 2026-08-02 | Fix persistent subagent startup and TUI rendering | `1a578dd` | `main` |
 | 6 | 2026-08-02 | Subagents native view parity: host editor + host rendering | `902cd5b`, `edc3fba`, `f0347ff`, `364a135` | `main` |
 | 5 | 2026-08-01 | Simplify subagent params: remove chain, acceptance, clarify, share, budget/timeout/cwd overrides | `0be079a` | `main` |

@@ -425,3 +425,37 @@ Fixed idle foreground parallel RPC children, restored immediate running tool ani
 - **Implementation commit**: `131bac8` `feat(subagents): simplify and unify subagent experience`.
 - **Verification**: `npm run test:unit` 1136/1136 pass; `npm run test:integration` 184/184 pass (one initial flaky failure, not reproduced on two reruns).
 - **Preserved**: unrelated `.pi/settings.json` worktree change left uncommitted per PRD constraint.
+
+
+## Session 8: Fix TUI lag while subagents run
+
+**Date**: 2026-08-04
+**Task**: Fix TUI lag while subagents run
+**Branch**: `main`
+
+### Summary
+
+Researched and fixed periodic TUI lag during subagent runs. Root cause: subagent activity drove high-frequency full-tree TUI re-renders (80ms spinner animation = 12.5fps, 250ms async poller, per-event renders) plus O(transcript) work per frame (getFinalOutput) and per-event messages copies. Fixed: lazy getFinalOutput while running, messages-less per-event snapshots (final keeps them), animation 80->200ms, async tracker poll 250->500ms with widget render throttle (sticky dirty flag), slash child-view rebuild throttle (version-change or <=1/500ms), steer view skips idle requestRender. All 1139 unit tests + async-job-tracker/foreground/slash/render/steer integration suites green. Spec updated with TUI render-frequency contract and strip-mode test conventions.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ffb4ec9` | (see git log) |
+| `db2be90` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
