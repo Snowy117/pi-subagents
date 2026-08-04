@@ -1,18 +1,34 @@
 <p>
-  <img src="https://raw.githubusercontent.com/nicobailon/pi-subagents/main/banner.png" alt="pi-subagents" width="1100">
+  <img src="banner.png" alt="pi-subagents" width="1100">
 </p>
 
 # pi-subagents
 
-`pi-subagents` gives Pi one delegation tool, a native child-conversation view, and a detached runner for single or parallel work. A normal call can still behave synchronously: the extension launches the detached runner, waits for that exact run, and returns the full result.
+`pi-subagents` is a [Pi](https://github.com/earendil-works/pi) extension that gives your coding agent one delegation tool, a native child-conversation view, and a detached runner for single or parallel subagent work.
+
+The public surface is deliberately small:
+
+- **one tool** — `subagent`;
+- **one slash command** — `/subagents`;
+- **one bundled agent** — the neutral `delegate` fallback;
+- **no packaged prompt templates**.
+
+Everything else — specialized agents, extra commands, prompts — comes from your user config, your project, or other packages.
 
 ## Install
 
 ```bash
-pi install npm:pi-subagents
+pi install npm:@snowy117/pi-subagents
 ```
 
 Pi 0.83.0 or newer is recommended for the keybinding and host-editor behavior described below.
+
+Alternatively, the package ships a small installer that clones the repository into Pi's extension directory:
+
+```bash
+npx @snowy117/pi-subagents            # install (or `git pull` an existing install)
+npx @snowy117/pi-subagents --remove   # remove
+```
 
 ## Start here
 
@@ -30,18 +46,7 @@ Run two delegates in parallel: one for correctness and one for missing tests.
 Run a delegate in the background while I continue working.
 ```
 
-The extension does not install opinionated reviewer, planner, researcher, or implementation roles. Add your own user, project, or package agents when you want specialized behavior.
-
-## Public surface
-
-The package exposes:
-
-- one tool: `subagent`;
-- one built-in slash command: `/subagents`;
-- no packaged prompt templates;
-- one bundled agent definition: `delegate`.
-
-Other Pi extensions, user configuration, project configuration, and third-party packages may add their own commands, prompts, and agents independently.
+The extension does not install opinionated reviewer, planner, researcher, or implementation roles. Add your own user, project, or package agents when you want specialized behavior — see [Add custom agents](#add-custom-agents).
 
 ## Execute work
 
@@ -89,16 +94,16 @@ Useful execution fields:
 | `tasks` | `{ agent, task, count?, progress?, model?, skill? }[]` |
 | `concurrency` | Maximum concurrent children for a parallel call |
 | `worktree` | Isolate parallel tasks in git worktrees |
-| `context` | `"fresh"` or `"fork"`; explicit value overrides agent defaults |
-| `async` | `true` returns the detached launch receipt; false/default waits for the same detached run |
+| `context` | `"fresh"` or `"fork"`; an explicit value overrides agent defaults |
+| `async` | `true` returns the detached launch receipt; `false`/default waits for the same detached run |
 | `artifacts` | Enable or disable run artifacts |
 | `includeProgress` | Include full progress in the returned result |
 
-Every public execution uses the same detached runner. There is no separate foreground execution mechanism behind a default synchronous call.
+Every public execution uses the same detached runner. There is no separate foreground execution mechanism behind a default synchronous call — a default call launches the detached runner, waits for that exact run, and returns the full result.
 
 ## Wait without polling
 
-Waiting is part of the `subagent` tool:
+Waiting is part of the `subagent` tool — there is no standalone `wait` tool:
 
 ```js
 subagent({ action: "wait" })
@@ -123,6 +128,7 @@ Do not run sleep loops or repeatedly poll status just to wait. Use the integrate
 ## Inspect and control runs
 
 ```js
+subagent({ action: "list" })
 subagent({ action: "status", id: "..." })
 subagent({ action: "status", view: "fleet" })
 subagent({ action: "status", id: "...", view: "transcript", index: 0, lines: 120 })
@@ -133,15 +139,15 @@ subagent({ action: "steer", id: "...", index: 0, message: "Check the migration p
 
 Run IDs accept exact values or unique prefixes. Exact values always win over prefixes.
 
-Opt-in scheduled runs retain their existing actions: `schedule`, `schedule-list`, `schedule-status`, and `schedule-cancel`. Schedule only work the user explicitly asked to delay.
+Opt-in scheduled runs retain their existing actions — `schedule`, `schedule-list`, `schedule-status`, and `schedule-cancel` — and only honor an explicit user request to delay a launch.
 
 ## `/subagents`: native child conversation
 
-Run `/subagents` to choose an available child. The normal child view keeps Pi's real editor mounted and focused, so autocomplete, multiline input, paste, images, slash routing, custom editor wrappers, and user keybindings continue to work.
+Run `/subagents` to choose an available child. The child view keeps Pi's real editor mounted and focused, so autocomplete, multiline input, paste, images, slash routing, custom editor wrappers, and user keybindings continue to work.
 
 The selected child's messages and tools use Pi's native message components. The widget contributes the complete rendered child transcript to the TUI root instead of slicing it to a moving viewport tail. Short histories are padded to fill the available chat area; long histories remain available through terminal scrollback.
 
-Foreground-resident, running detached, and reopenable finished children resolve through the same `ChildConversationChannel` abstraction. The parent never writes a child session file and never opens a second writer for the same session.
+Foreground-resident, running detached, and reopenable finished children resolve through the same conversation-channel abstraction. The parent never writes a child session file and never opens a second writer for the same session.
 
 ### Leave child mode
 
@@ -155,6 +161,19 @@ All normal child-view exits share the same teardown:
 The `app.exit` route uses Pi's live keybinding manager. The default is Ctrl+D, but remaps, multiple bindings, legacy migration, and `[]` removal in `keybindings.json` are honored. With non-empty editor text, the key passes through to the real editor, matching Pi's normal empty-input exit behavior.
 
 Pi's double-Ctrl+C emergency process exit remains host-owned and is not intercepted.
+
+### Child-mode key routing
+
+While child mode is active, app-level keys route to the child (default on, `subagents.childKeyRoute`):
+
+- `Esc` aborts the child stream (streaming only);
+- `Shift+Tab` cycles the child's thinking level;
+- `Ctrl+P` / `Shift+Ctrl+P` cycle the child's model;
+- `Ctrl+L` opens the model picker;
+- `Ctrl+O` toggles tool output expansion;
+- `Ctrl+T` toggles hidden thinking.
+
+Bindings resolve from defaults merged with your `keybindings.json` remaps. Editor-level keys are never intercepted; main-agent app keys are unavailable while child mode is active.
 
 ## Optional picker keybinding
 
@@ -228,12 +247,9 @@ Use `subagent({ action: "list" })` to inspect the effective, executable definiti
 
 ## Detached lifecycle and results
 
-Every successful launch emits a start event immediately. The editor-top active-run indicator therefore appears for both:
+Every successful launch emits a start event immediately. The status bar shows the number of currently active background subagents. Synchronous launch-plus-wait calls are excluded while the caller still owns the wait; if waiting returns early for attention or parent-turn cancellation and the child keeps running, it is then counted as background work.
 
-- `async: true` launches that return immediately;
-- default synchronous launch-plus-wait calls while their integrated wait is active.
-
-The tracker owns queued/running/attention/completion state and polls persisted status. A sync-owned run remains visible and navigable if waiting returns early for attention or parent-turn cancellation.
+The tracker owns queued/running/attention/completion state and polls persisted status. Detailed lifecycle and transcript information remains available through `subagent({ action: "status", ... })`.
 
 Detached run artifacts include the run directory, `status.json`, `events.jsonl`, output logs, session paths when enabled, workflow/output metadata, and final result JSON. Runner-level deadlines and budgets remain valid terminal failures; only the orchestration wait is indefinite.
 
@@ -286,10 +302,10 @@ The published package includes source, the neutral `agents/delegate.md`, skills,
 ## Development
 
 ```bash
-npm test
+npm test                # unit tests (Node test runner, native TS stripping)
 npm run test:integration
 npm run test:e2e
-npm run test:all
+npm run test:all        # unit + integration + e2e
 ```
 
 Unit tests use Node's test runner with native TypeScript stripping. Integration and E2E use the repository loader and faux/mock Pi providers; no real API key is required for the supported E2E lane.
