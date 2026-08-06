@@ -16,7 +16,7 @@ import { AssistantMessageComponent, BashExecutionComponent, CustomMessageCompone
 import { Spacer, Text } from "@earendil-works/pi-tui";
 import { extractTextFromContent } from "../../shared/utils/messages.ts";
 import { extractToolCalls, getUserMessageText, type AssemblerState, type RawMessage } from "./assembly-types.ts";
-import { viewerMarkdownTheme } from "./viewer-settings.ts";
+import { setViewerMarkdownCodeBlockIndent } from "./viewer-settings.ts";
 
 export interface MessageAssembler {
 	addMessageToChat(message: RawMessage): void;
@@ -28,8 +28,6 @@ export interface MessageAssembler {
 }
 
 export function createMessageAssembler(state: AssemblerState): MessageAssembler {
-	const markdownTheme = () => viewerMarkdownTheme(state.settings);
-
 	const addToolComponent = (toolCallId: string, toolName: string, args: Record<string, unknown>): ToolExecutionComponent => {
 		const component = new ToolExecutionComponent(toolName, toolCallId, args, {
 			showImages: state.settings.showImages,
@@ -44,7 +42,7 @@ export function createMessageAssembler(state: AssemblerState): MessageAssembler 
 	const addUserMessage = (text: string): void => {
 		if (!text) return;
 		if (state.container.children.length > 0) state.container.addChild(new Spacer(1));
-		state.container.addChild(new UserMessageComponent(text, markdownTheme(), state.settings.outputPad));
+		state.container.addChild(new UserMessageComponent(text, state.markdownTheme, state.settings.outputPad));
 	};
 
 	const addCustomMessage = (message: RawMessage): void => {
@@ -54,7 +52,7 @@ export function createMessageAssembler(state: AssemblerState): MessageAssembler 
 		const component = new CustomMessageComponent(
 			message as never,
 			renderer as never,
-			markdownTheme(),
+			state.markdownTheme,
 			state.settings.outputPad,
 		);
 		component.setExpanded(state.toolOutputExpanded);
@@ -87,7 +85,7 @@ export function createMessageAssembler(state: AssemblerState): MessageAssembler 
 				state.container.addChild(new AssistantMessageComponent(
 					message as unknown as AssistantMessage,
 					state.settings.hideThinkingBlock,
-					markdownTheme(),
+					state.markdownTheme,
 					state.settings.hiddenThinkingLabel,
 					state.settings.outputPad,
 				));
@@ -147,27 +145,48 @@ export function createMessageAssembler(state: AssemblerState): MessageAssembler 
 	};
 
 	const applySettings = (next: AssemblerState["settings"], nextExpanded: boolean): void => {
+		const previous = state.settings;
+		const expandedChanged = state.toolOutputExpanded !== nextExpanded;
+		const hideThinkingChanged = previous.hideThinkingBlock !== next.hideThinkingBlock;
+		const hiddenThinkingLabelChanged = previous.hiddenThinkingLabel !== next.hiddenThinkingLabel;
+		const outputPadChanged = previous.outputPad !== next.outputPad;
+		const showImagesChanged = previous.showImages !== next.showImages;
+		const imageWidthChanged = previous.imageWidthCells !== next.imageWidthCells;
+		const codeBlockIndentChanged = previous.codeBlockIndent !== next.codeBlockIndent;
+		if (
+			!expandedChanged
+			&& !hideThinkingChanged
+			&& !hiddenThinkingLabelChanged
+			&& !outputPadChanged
+			&& !showImagesChanged
+			&& !imageWidthChanged
+			&& !codeBlockIndentChanged
+		) return;
+
 		state.settings = next;
 		state.toolOutputExpanded = nextExpanded;
+		if (codeBlockIndentChanged) setViewerMarkdownCodeBlockIndent(state.markdownTheme, next.codeBlockIndent);
 		for (const child of state.container.children) {
 			if (child instanceof ToolExecutionComponent) {
-				child.setExpanded(state.toolOutputExpanded);
-				child.setShowImages(state.settings.showImages);
-				child.setImageWidthCells(state.settings.imageWidthCells);
+				if (expandedChanged) child.setExpanded(state.toolOutputExpanded);
+				if (showImagesChanged) child.setShowImages(state.settings.showImages);
+				if (imageWidthChanged) child.setImageWidthCells(state.settings.imageWidthCells);
 			} else if (child instanceof CustomMessageComponent) {
-				child.setExpanded(state.toolOutputExpanded);
-				child.setOutputPad(state.settings.outputPad);
+				if (expandedChanged) child.setExpanded(state.toolOutputExpanded);
+				if (outputPadChanged) child.setOutputPad(state.settings.outputPad);
+				if (codeBlockIndentChanged && !expandedChanged && !outputPadChanged) child.invalidate();
 			} else if (child instanceof BashExecutionComponent) {
-				child.setExpanded(state.toolOutputExpanded);
+				if (expandedChanged) child.setExpanded(state.toolOutputExpanded);
 			} else if (child instanceof AssistantMessageComponent) {
-				child.setHideThinkingBlock(state.settings.hideThinkingBlock);
-				child.setHiddenThinkingLabel(state.settings.hiddenThinkingLabel);
-				child.setOutputPad(state.settings.outputPad);
+				if (hideThinkingChanged) child.setHideThinkingBlock(state.settings.hideThinkingBlock);
+				if (hiddenThinkingLabelChanged) child.setHiddenThinkingLabel(state.settings.hiddenThinkingLabel);
+				if (outputPadChanged) child.setOutputPad(state.settings.outputPad);
+				if (codeBlockIndentChanged && !hideThinkingChanged && !hiddenThinkingLabelChanged && !outputPadChanged) child.invalidate();
 			} else if (child instanceof UserMessageComponent) {
-				child.setOutputPad(state.settings.outputPad);
+				if (outputPadChanged) child.setOutputPad(state.settings.outputPad);
+				if (codeBlockIndentChanged && !outputPadChanged) child.invalidate();
 			}
 		}
-		state.container.invalidate();
 	};
 
 	return {

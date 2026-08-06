@@ -52,8 +52,8 @@ must be followed by hand**. Reviewers compare against the existing code.
 | Bare `catch {}` with no comment | Reviewers can't tell if suppression is safe | add an explanatory comment |
 | Branching on `error.message` | Brittle, locale-dependent | branch on `.code` |
 | Spawning child without stdio guard | Stuck child hangs the extension | `attachPostExitStdioGuard` |
-| O(transcript) work in a per-frame render hot path | Full TUI renders at animation/poll cadence re-scan the whole child transcript | lazy-compute output for non-running rows only; cache on data change |
-| Unthrottled render drivers while a subagent runs | 80 ms spinner invalidates → 12.5 fps full re-renders; 250 ms pollers + sync fs reads on the TUI thread | animation ≤ 200 ms; pollers ≥ 500 ms; widget re-renders throttled except terminal transitions |
+| O(transcript) work in a per-frame render hot path | Full TUI renders at animation/poll cadence re-scan the whole child transcript | lazy-compute output for non-running rows only; cache on data change; make equal settings/state snapshots return in O(1) before walking historical components |
+| Periodic decorative render drivers while a subagent runs | Even a 200 ms spinner invalidation continuously traverses the accumulated root transcript; the cost grows with session length | drive glyphs from real progress events; if a periodic refresh is functionally required, bound its cadence and stop it when data is unchanged or terminal |
 | Per-event snapshots carrying the full `messages` array | O(transcript) copy on every child event | `snapshotResult(result, progress, false)` per event; final snapshots keep messages |
 | `any` for external payloads | No type safety | `unknown` / TypeBox schema |
 | Adding to a large file in `runs/background/` | That module is intentionally many small files | new focused file |
@@ -69,6 +69,10 @@ must be followed by hand**. Reviewers compare against the existing code.
 - **`npm test` (unit tier) must pass** before commit. It is the fast loop.
 - Tests must be **deterministic**: inject `now`/`random`/`pid`; no real timers
   or real filesystem in unit tests.
+- Performance regressions should use deterministic operation counts as the
+  correctness gate (for example, zero historical setters/invalidations for an
+  equal snapshot). Keep wall-clock microbenchmarks as supporting evidence, not
+  pass/fail assertions.
 - Run the TypeScript language server diagnostics (`lsp_diagnostics`, or
   `path="*"` for the whole workspace) after non-trivial edits.
 

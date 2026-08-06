@@ -459,3 +459,29 @@ Researched and fixed periodic TUI lag during subagent runs. Root cause: subagent
 ### Next Steps
 
 - None - task complete
+
+## Session: Optimize TUI responsiveness for long transcripts
+
+**Date**: 2026-08-05
+**Task**: 优化 TUI 响应性能 (08-05-optimize-tui-performance)
+**Branch**: `main`
+
+### Summary
+
+Optimized TUI responsiveness that degraded as conversation/output grew. Root cause: child-conversation `applySettings()` ran on every render, walked all historical native components, called setters on equal values, then invalidated the whole container — upstream setters rebuilt Markdown/tool caches each frame. Benchmark: 1,000 messages / 13,000 lines, equal-settings+render 86.960ms vs cached 0.208ms (417.9×). Fixes: change-driven/idempotent settings propagation (O(1) equal path, field-selective setters, no unconditional container invalidation; shared mutable MarkdownTheme for codeBlockIndent); bounded running partial updates (recentOutput ≤50 lines / ≤4096 chars, no full-transcript getFinalOutput scan; final/timeout/budget output preserved); removed 200ms perioder foreground decorative animation (event-driven glyphs, stale timer cleanup retained). Deterministic regression tests prove zero historical setter/invalidation on equal snapshot. Final: unit 1147/1147, integration 159/159, git diff --check clean. Spec updated (periodic decorative render drivers forbidden; operation-count test gate). Performance research archived at .trellis/tasks/archive/2026-08/08-05-optimize-tui-performance/.
+
+### Main Changes
+
+- src/tui/child-conversation/assemble-message.ts — selective settings propagation
+- src/tui/child-conversation/assemble-message.ts / assembler.ts / assembly-types.ts / viewer-settings.ts — shared MarkdownTheme
+- src/runs/foreground/execution/single-attempt-events.ts — bounded running updates
+- src/extension/registration/tools.ts — removed periodic animation
+- test/unit/* — deterministic regression tests
+
+### Testing
+
+- [OK] unit 1147/1147, integration 159/159, diff --check clean
+
+### Status
+
+[OK] **Completed**

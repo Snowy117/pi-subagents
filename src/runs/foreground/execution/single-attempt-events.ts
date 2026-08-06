@@ -24,7 +24,40 @@ import {
 } from "../../shared/long-running-guard.ts";
 import type { SingleAttemptState } from "./single-attempt-state.ts";
 import { toolBudgetState } from "../../shared/tool-budget.ts";
-import { extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "../../../shared/utils.ts";
+import { extractTextFromContent, extractToolArgsPreview } from "../../../shared/utils.ts";
+
+interface RunningUpdateResult {
+	timedOut?: boolean;
+	turnBudgetExceeded?: boolean;
+	finalOutput?: string;
+}
+
+export const MAX_RUNNING_UPDATE_CHARS = 4_096;
+const MAX_RUNNING_UPDATE_LINES = 50;
+
+function boundedRecentLine(line: string): string | undefined {
+	const tail = line.slice(-MAX_RUNNING_UPDATE_CHARS);
+	if (tail.trim()) {
+		return line.length > MAX_RUNNING_UPDATE_CHARS
+			? `…${tail.slice(1)}`
+			: tail;
+	}
+	if (line.length <= MAX_RUNNING_UPDATE_CHARS) return undefined;
+	const head = line.slice(0, MAX_RUNNING_UPDATE_CHARS);
+	return head.trim() ? `${head.slice(0, -1)}…` : undefined;
+}
+
+export function runningUpdateText(result: RunningUpdateResult, recentOutput: readonly string[]): string {
+	if ((result.timedOut || result.turnBudgetExceeded) && result.finalOutput) return result.finalOutput;
+	const firstIndex = Math.max(0, recentOutput.length - MAX_RUNNING_UPDATE_LINES);
+	for (let index = recentOutput.length - 1; index >= firstIndex; index--) {
+		const line = recentOutput[index];
+		if (!line) continue;
+		const bounded = boundedRecentLine(line);
+		if (bounded) return bounded;
+	}
+	return "(running...)";
+}
 
 export function attachEventHandlers(state: SingleAttemptState): void {
 	state.emitUpdateSnapshot = (text: string) => {
@@ -48,8 +81,7 @@ export function attachEventHandlers(state: SingleAttemptState): void {
 	state.fireUpdate = () => {
 		if (!state.options.onUpdate || state.processClosed) return;
 		state.progress.durationMs = Date.now() - state.startTime;
-		const output = (state.result.timedOut || state.result.turnBudgetExceeded) && state.result.finalOutput ? state.result.finalOutput : getFinalOutput(state.result.messages ?? []);
-		state.emitUpdateSnapshot(output || "(running...)");
+		state.emitUpdateSnapshot(runningUpdateText(state.result, state.progress.recentOutput));
 	};
 
 	state.processLine = (line: string) => {

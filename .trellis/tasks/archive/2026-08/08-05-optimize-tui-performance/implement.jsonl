@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/typescript/index.md", "reason": "TypeScript package pre-development checklist and quality gate"}
+{"file": ".trellis/spec/typescript/testing-guidelines.md", "reason": "Deterministic node:test conventions and injected-counter guidance for performance regressions"}
+{"file": ".trellis/spec/typescript/quality-guidelines.md", "reason": "Existing TUI hot-path rules and full quality checklist"}
+{"file": ".trellis/spec/typescript/subagent-interactive-control.md", "reason": "Child conversation and steer-view behavioral contracts that the optimization must preserve"}
+{"file": ".trellis/tasks/08-05-optimize-tui-performance/research/long-transcript-complexity.md", "reason": "Measured current-HEAD long-transcript root cause, benchmark shape, and prioritized fix boundary"}

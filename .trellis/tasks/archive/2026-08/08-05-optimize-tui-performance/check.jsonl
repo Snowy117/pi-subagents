@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/typescript/index.md", "reason": "Package-level quality check entry point"}
+{"file": ".trellis/spec/typescript/testing-guidelines.md", "reason": "Validate deterministic complexity tests and appropriate test tiers"}
+{"file": ".trellis/spec/typescript/quality-guidelines.md", "reason": "Review forbidden render hot paths and required diagnostics/tests"}
+{"file": ".trellis/spec/typescript/subagent-interactive-control.md", "reason": "Verify child-view behavior, controls, and native component parity are preserved"}
+{"file": ".trellis/tasks/08-05-optimize-tui-performance/research/long-transcript-complexity.md", "reason": "Verify the implementation removes the measured dominant regression without scope creep"}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { AssistantMessageComponent, BashExecutionComponent, CustomMessageComponent, ToolExecutionComponent, UserMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { createChildConversationAssembler } from "../../src/tui/child-conversation/assembler.ts";
 import { VIEWER_SETTINGS_DEFAULTS } from "../../src/tui/child-conversation/viewer-settings.ts";
 
@@ -46,6 +46,10 @@ function messageRecord(role: string, content: unknown, extra: Record<string, unk
 
 const userText = { type: "text", text: "hello there" };
 const assembledText = { type: "text", text: "Let me check." };
+
+function plainTerminalLine(line: string): string {
+	return line.replace(/\x1b(?:\][^\x07]*\x07|\[[0-?]*[ -/]*[@-~])/g, "").trimEnd();
+}
 
 describe("child conversation assembler", () => {
 	it("renders user and assistant messages with the native components", () => {
@@ -218,21 +222,158 @@ describe("child conversation assembler", () => {
 		assert.equal(assembler.container.children.length, before + 2, "spacer + user component");
 	});
 
-	it("applies settings to existing components on each pass (setExpanded re-apply)", () => {
-		const expandedSpy = spyMethod(ToolExecutionComponent.prototype, "setExpanded");
+	it("does no historical work for an equal settings snapshot over a long transcript", () => {
+		const setterSpies = [
+			spyMethod(AssistantMessageComponent.prototype, "setHideThinkingBlock"),
+			spyMethod(AssistantMessageComponent.prototype, "setHiddenThinkingLabel"),
+			spyMethod(AssistantMessageComponent.prototype, "setOutputPad"),
+			spyMethod(UserMessageComponent.prototype, "setOutputPad"),
+			spyMethod(ToolExecutionComponent.prototype, "setExpanded"),
+			spyMethod(ToolExecutionComponent.prototype, "setShowImages"),
+			spyMethod(ToolExecutionComponent.prototype, "setImageWidthCells"),
+			spyMethod(CustomMessageComponent.prototype, "setExpanded"),
+			spyMethod(CustomMessageComponent.prototype, "setOutputPad"),
+			spyMethod(BashExecutionComponent.prototype, "setExpanded"),
+		];
+		const invalidateSpy = spyMethod(Container.prototype, "invalidate");
+		try {
+			const assembler = makeAssembler();
+			assembler.seedTranscriptRecords([
+				...Array.from({ length: 1_000 }, (_, index) =>
+					messageRecord(index % 2 === 0 ? "user" : "assistant", [{ type: "text", text: `message ${index}` }], { stopReason: "stop" })),
+				messageRecord("assistant", [{ type: "toolCall", id: "equal-tool", name: "read", arguments: {} }], { stopReason: "toolUse" }),
+				messageRecord("custom", [{ type: "text", text: "custom" }], { customType: "unknown", display: "custom" }),
+				messageRecord("bashExecution", [], { command: "pwd", exitCode: 0 }),
+			]);
+			for (const spy of setterSpies) spy.calls.length = 0;
+			invalidateSpy.calls.length = 0;
+			assembler.applySettings(makeSettings(), false);
+			assert.equal(setterSpies.reduce((total, spy) => total + spy.calls.length, 0), 0);
+			assert.equal(invalidateSpy.calls.length, 0);
+		} finally {
+			invalidateSpy.restore();
+			for (const spy of setterSpies.reverse()) spy.restore();
+		}
+	});
+
+	it("propagates expansion changes only to expandable components", () => {
+		const toolSpy = spyMethod(ToolExecutionComponent.prototype, "setExpanded");
+		const customSpy = spyMethod(CustomMessageComponent.prototype, "setExpanded");
+		const bashSpy = spyMethod(BashExecutionComponent.prototype, "setExpanded");
+		const assistantSpy = spyMethod(AssistantMessageComponent.prototype, "setOutputPad");
+		try {
+			const assembler = makeAssembler();
+			assembler.seedTranscriptRecords([
+				messageRecord("assistant", [{ type: "toolCall", id: "c1", name: "read", arguments: {} }], { stopReason: "toolUse" }),
+				messageRecord("custom", [{ type: "text", text: "custom" }], { customType: "unknown", display: "custom" }),
+				messageRecord("bashExecution", [], { command: "pwd", exitCode: 0 }),
+			]);
+			toolSpy.calls.length = 0;
+			customSpy.calls.length = 0;
+			bashSpy.calls.length = 0;
+			assistantSpy.calls.length = 0;
+			assembler.applySettings(makeSettings(), true);
+			assert.equal(toolSpy.calls.length, 1);
+			assert.equal(customSpy.calls.length, 1);
+			assert.equal(bashSpy.calls.length, 1);
+			assert.equal(assistantSpy.calls.length, 0);
+		} finally {
+			assistantSpy.restore();
+			bashSpy.restore();
+			customSpy.restore();
+			toolSpy.restore();
+		}
+	});
+
+	it("propagates output padding only to message components", () => {
+		const assistantSpy = spyMethod(AssistantMessageComponent.prototype, "setOutputPad");
+		const userSpy = spyMethod(UserMessageComponent.prototype, "setOutputPad");
+		const customSpy = spyMethod(CustomMessageComponent.prototype, "setOutputPad");
+		const toolSpy = spyMethod(ToolExecutionComponent.prototype, "setExpanded");
 		try {
 			const assembler = makeAssembler();
 			assembler.seedTranscriptRecords([
 				messageRecord("user", [userText]),
-				messageRecord("assistant", [{ type: "toolCall", id: "c1", name: "read", arguments: {} }], { stopReason: "toolUse" }),
+				messageRecord("assistant", [assembledText], { stopReason: "stop" }),
+				messageRecord("custom", [{ type: "text", text: "custom" }], { customType: "unknown", display: "custom" }),
 			]);
-			expandedSpy.calls.length = 0;
-			assembler.applySettings(makeSettings(), true);
-			assert.ok(expandedSpy.calls.length >= 1, "applySettings re-applies setExpanded on every tool component");
-			assert.equal((expandedSpy.calls[expandedSpy.calls.length - 1]!.args[0] as boolean), true);
+			assistantSpy.calls.length = 0;
+			userSpy.calls.length = 0;
+			customSpy.calls.length = 0;
+			toolSpy.calls.length = 0;
+			assembler.applySettings(makeSettings({ outputPad: 0 }), false);
+			assert.equal(assistantSpy.calls.length, 1);
+			assert.equal(userSpy.calls.length, 1);
+			assert.equal(customSpy.calls.length, 1);
+			assert.equal(toolSpy.calls.length, 0);
 		} finally {
-			expandedSpy.restore();
+			toolSpy.restore();
+			customSpy.restore();
+			userSpy.restore();
+			assistantSpy.restore();
 		}
+	});
+
+	it("propagates thinking and image fields only to their native component classes", () => {
+		const hideSpy = spyMethod(AssistantMessageComponent.prototype, "setHideThinkingBlock");
+		const labelSpy = spyMethod(AssistantMessageComponent.prototype, "setHiddenThinkingLabel");
+		const imagesSpy = spyMethod(ToolExecutionComponent.prototype, "setShowImages");
+		const widthSpy = spyMethod(ToolExecutionComponent.prototype, "setImageWidthCells");
+		try {
+			const assembler = makeAssembler();
+			assembler.seedTranscriptRecords([
+				messageRecord("assistant", [assembledText, { type: "toolCall", id: "c1", name: "read", arguments: {} }], { stopReason: "toolUse" }),
+			]);
+			hideSpy.calls.length = 0;
+			labelSpy.calls.length = 0;
+			imagesSpy.calls.length = 0;
+			widthSpy.calls.length = 0;
+			assembler.applySettings(makeSettings({ hideThinkingBlock: true }), false);
+			assert.equal(hideSpy.calls.length, 1);
+			assert.equal(labelSpy.calls.length, 0);
+			assert.equal(imagesSpy.calls.length, 0);
+			assert.equal(widthSpy.calls.length, 0);
+
+			assembler.applySettings(makeSettings({ hideThinkingBlock: true, hiddenThinkingLabel: "Hidden" }), false);
+			assert.equal(labelSpy.calls.length, 1);
+			assert.equal(imagesSpy.calls.length, 0);
+			assert.equal(widthSpy.calls.length, 0);
+
+			assembler.applySettings(makeSettings({ hideThinkingBlock: true, hiddenThinkingLabel: "Hidden", showImages: false }), false);
+			assert.equal(imagesSpy.calls.length, 1);
+			assert.equal(widthSpy.calls.length, 0);
+
+			assembler.applySettings(makeSettings({ hideThinkingBlock: true, hiddenThinkingLabel: "Hidden", showImages: false, imageWidthCells: 42 }), false);
+			assert.equal(imagesSpy.calls.length, 1);
+			assert.equal(widthSpy.calls.length, 1);
+		} finally {
+			widthSpy.restore();
+			imagesSpy.restore();
+			labelSpy.restore();
+			hideSpy.restore();
+		}
+	});
+
+	it("rebuilds Markdown-bearing components through the shared theme when code block indentation changes", () => {
+		const assembler = makeAssembler();
+		assembler.seedTranscriptRecords([
+			messageRecord("user", [{ type: "text", text: "```ts\nconst x = 1;\n```" }]),
+			messageRecord("assistant", [{ type: "text", text: "```ts\nconst y = 2;\n```" }], { stopReason: "stop" }),
+		]);
+		assembler.applySettings(makeSettings({ codeBlockIndent: "    " }), false);
+		const lines = assembler.container.render(80).map(plainTerminalLine);
+		assert.ok(lines.find((line) => line.includes("const x"))?.startsWith("     const x"));
+		assert.ok(lines.find((line) => line.includes("const y"))?.startsWith("     const y"));
+	});
+
+	it("uses the updated shared theme when code block indentation and output padding change together", () => {
+		const assembler = makeAssembler();
+		assembler.seedTranscriptRecords([
+			messageRecord("user", [{ type: "text", text: "```ts\nconst combined = true;\n```" }]),
+		]);
+		assembler.applySettings(makeSettings({ codeBlockIndent: "    ", outputPad: 0 }), false);
+		const codeLine = assembler.container.render(80).map(plainTerminalLine).find((line) => line.includes("const combined"));
+		assert.ok(codeLine?.startsWith("    const combined"));
 	});
 
 	it("is not streaming before any live assistant turn", () => {

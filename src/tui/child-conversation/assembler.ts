@@ -22,7 +22,6 @@ import {
 	type ChildConversationAssembler,
 	type ChildConversationAssemblerOptions,
 } from "./assembly-types.ts";
-import { viewerMarkdownTheme } from "./viewer-settings.ts";
 
 export type { ChildConversationAssembler, ChildConversationAssemblerOptions } from "./assembly-types.ts";
 
@@ -70,7 +69,7 @@ export function createChildConversationAssembler(options: ChildConversationAssem
 						state.streamingComponent = new AssistantMessageComponent(
 							undefined,
 							state.settings.hideThinkingBlock,
-							viewerMarkdownTheme(state.settings),
+							state.markdownTheme,
 							state.settings.hiddenThinkingLabel,
 							state.settings.outputPad,
 						);

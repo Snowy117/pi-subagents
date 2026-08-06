@@ -9,8 +9,8 @@
  */
 
 import { AssistantMessageComponent, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
-import { Container, type TUI } from "@earendil-works/pi-tui";
-import type { ViewerSettings } from "./viewer-settings.ts";
+import { Container, type MarkdownTheme, type TUI } from "@earendil-works/pi-tui";
+import { viewerMarkdownTheme, type ViewerSettings } from "./viewer-settings.ts";
 
 /** A transcript record the assembler can seed from (subset of
  *  SteerTranscriptRecord; structurally compatible, keeps this module free of
@@ -131,6 +131,7 @@ export interface AssemblerState {
 	cwd: string;
 	resolveCustomRenderer: ((customType: string | undefined) => unknown) | undefined;
 	settings: ViewerSettings;
+	markdownTheme: MarkdownTheme;
 	toolOutputExpanded: boolean;
 	pendingTools: Map<string, ToolExecutionComponent>;
 	streamingComponent: AssistantMessageComponent | undefined;
@@ -144,6 +145,7 @@ export function createAssemblerState(options: ChildConversationAssemblerOptions)
 		cwd: options.cwd,
 		resolveCustomRenderer: options.resolveCustomRenderer,
 		settings: options.settings,
+		markdownTheme: viewerMarkdownTheme(options.settings),
 		toolOutputExpanded: options.toolOutputExpanded,
 		pendingTools: new Map(),
 		streamingComponent: undefined,

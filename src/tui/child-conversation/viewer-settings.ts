@@ -165,3 +165,7 @@ export function viewerMarkdownTheme(settings: Pick<ViewerSettings, "codeBlockInd
 		codeBlockIndent: settings.codeBlockIndent,
 	};
 }
+
+export function setViewerMarkdownCodeBlockIndent(theme: MarkdownTheme, codeBlockIndent: string): void {
+	theme.codeBlockIndent = codeBlockIndent;
+}

@@ -36,4 +36,33 @@ describe("subagent tool call rendering", () => {
 	it("keeps the parallel cardinality label without an async badge", () => {
 		assert.equal(renderCall({}, { tasks: [{ agent: "worker" }, { agent: "reviewer", count: 2 }], async: true }), "subagent parallel (3)");
 	});
+
+	it("does not install a periodic invalidation loop for a quiet running result", () => {
+		let tool: { renderResult: (result: unknown, options: unknown, inputTheme: typeof theme, context: unknown) => unknown } | undefined;
+		registerSubagentTools({
+			registerTool(value: unknown) { tool = value as typeof tool; },
+		} as never, {
+			config: {},
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: { mode: "single", results: [] } }),
+		});
+		assert.ok(tool);
+		let invalidations = 0;
+		const staleTimer = setInterval(() => { invalidations++; }, 60_000);
+		const context = { state: { subagentResultAnimationTimer: staleTimer }, invalidate() { invalidations++; } };
+		try {
+			tool.renderResult({
+				content: [{ type: "text", text: "(running...)" }],
+				details: {
+					mode: "single",
+					results: [],
+					progress: [{ status: "running", recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0 }],
+				},
+			}, {}, theme, context);
+			assert.equal((context.state as { subagentResultAnimationTimer?: unknown }).subagentResultAnimationTimer, undefined);
+			assert.equal(invalidations, 0);
+		} finally {
+			clearInterval(staleTimer);
+			tool.renderResult({ content: [], details: { mode: "single", results: [], progress: [] } }, {}, theme, context);
+		}
+	});
 });
